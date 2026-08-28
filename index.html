@@ -72,7 +72,7 @@
   .tile{
     display:block; width:100%; text-align:left; background:var(--surface); border:1px solid var(--border);
     border-radius:var(--radius); padding:20px; margin-bottom:12px; color:var(--text); cursor:pointer;
-    position:relative; overflow:hidden;
+    position:relative; overflow:hidden; font-family:inherit; -webkit-appearance:none; appearance:none;
   }
   .tile:active{ background:var(--surface-raised); }
   .tile .t-label{ font-size:17px; font-weight:800; text-transform:uppercase; letter-spacing:.03em; }
@@ -225,7 +225,12 @@ function loadState(){
 }
 let state = loadState();
 function saveState(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }catch(e){
+    console.error('save failed', e);
+    alert('Could not save — your device storage may be full or restricted, so this change might not have been kept. Please export a backup from the Backup screen as soon as you can.');
+  }
 }
 
 /* =========================================================
@@ -280,19 +285,20 @@ function render(){
     titleEl.textContent = 'Racked';
     const backupBtn = document.createElement('button');
     backupBtn.className='icon-btn'; backupBtn.title='Backup'; backupBtn.textContent='⇅';
+    backupBtn.setAttribute('aria-label','Backup and export');
     backupBtn.onclick = ()=>navigate('backup');
     actionsEl.appendChild(backupBtn);
     renderHome();
   } else {
     const back = document.createElement('button');
-    back.className='icon-btn'; back.textContent='←';
+    back.className='icon-btn'; back.textContent='←'; back.setAttribute('aria-label','Back');
     back.onclick = ()=>history.back();
     actionsEl.appendChild(back);
   }
 
   if(currentView==='workouts'){ titleEl.textContent='Workouts'; renderWorkoutsList(); }
   if(currentView==='session'){ titleEl.textContent = currentParams.workoutName || 'Session'; renderSession(); }
-  if(currentView==='create'){ titleEl.textContent='Create Workout'; renderCreate(); }
+  if(currentView==='create'){ titleEl.textContent = currentParams.workoutId ? 'Edit Workout' : 'Create Workout'; renderCreate(currentParams.workoutId); }
   if(currentView==='measure'){ titleEl.textContent='Measurements'; renderMeasure(); }
   if(currentView==='progress'){ titleEl.textContent='Progression'; renderProgress(); }
   if(currentView==='backup'){ titleEl.textContent='Backup & Export'; renderBackup(); }
@@ -306,26 +312,26 @@ function renderHome(){
   el.innerHTML = `
     <div class="home-title">Racked</div>
     <div class="home-sub">Offline workout &amp; progress log</div>
-    <div class="tile c-red" id="t-workouts">
+    <button type="button" class="tile c-red" id="t-workouts">
       <div class="t-bar"></div>
       <div class="t-label">Workouts</div>
       <div class="t-sub">Run a session or browse your list</div>
-    </div>
-    <div class="tile c-blue" id="t-create">
+    </button>
+    <button type="button" class="tile c-blue" id="t-create">
       <div class="t-bar"></div>
       <div class="t-label">Create a Workout</div>
       <div class="t-sub">Build a new deck of exercises</div>
-    </div>
-    <div class="tile c-green" id="t-measure">
+    </button>
+    <button type="button" class="tile c-green" id="t-measure">
       <div class="t-bar"></div>
       <div class="t-label">Add Measurements</div>
       <div class="t-sub">Log arms, legs, waist and more</div>
-    </div>
-    <div class="tile c-muted" id="t-progress">
+    </button>
+    <button type="button" class="tile c-muted" id="t-progress">
       <div class="t-bar"></div>
       <div class="t-label">Progression</div>
       <div class="t-sub">Charts for lifts and body size</div>
-    </div>
+    </button>
   `;
   document.getElementById('t-workouts').onclick = ()=>navigate('workouts');
   document.getElementById('t-create').onclick = ()=>navigate('create');
@@ -352,7 +358,10 @@ function renderWorkoutsList(){
         <div class="li-main">${esc(w.name)}</div>
         <div class="li-sub">${exCount} exercise${exCount!==1?'s':''}</div>
       </div>
-      <button class="li-del" data-del="${w.id}">✕</button>
+      <div style="display:flex; gap:2px; flex-shrink:0;">
+        <button class="li-del" data-edit="${w.id}" aria-label="Edit ${esc(w.name)}" title="Edit">✎</button>
+        <button class="li-del" data-del="${w.id}" aria-label="Delete ${esc(w.name)}" title="Delete">✕</button>
+      </div>
     </div>`;
   });
   el.innerHTML = html + `<button class="btn ghost" id="w-newone" style="margin-top:8px;">+ New Workout</button>`;
@@ -360,6 +369,12 @@ function renderWorkoutsList(){
     item.addEventListener('click', (e)=>{
       if(e.target.closest('.li-del')) return;
       startOrResumeWorkout(item.dataset.id);
+    });
+  });
+  el.querySelectorAll('[data-edit]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      navigate('create', {workoutId: btn.dataset.edit});
     });
   });
   el.querySelectorAll('[data-del]').forEach(btn=>{
@@ -380,18 +395,29 @@ function renderWorkoutsList(){
 function startOrResumeWorkout(workoutId){
   const w = state.workouts.find(x=>x.id===workoutId);
   if(!w) return;
-  if(state.activeSession){
-    if(state.activeSession.workoutId===workoutId){
+
+  if(state.activeSession && state.activeSession.workoutId===workoutId){
+    const allFinished = state.activeSession.exercises.every(e=>e.finished);
+    if(!allFinished){
       navigate('session', {workoutId, workoutName:w.name});
       return;
-    } else {
-      if(!confirm(`You have an unfinished session for "${state.activeSession.workoutName}". Discard it and start "${w.name}"?`)) return;
     }
+    // Every card was already finished from a previous visit that never hit
+    // "Finish Workout" — archive it to history and start clean instead of
+    // reopening a session where everything looks permanently used up.
+    state.sessions.push(JSON.parse(JSON.stringify(state.activeSession)));
+    state.activeSession = null;
+    saveState();
+    toast('Previous session saved — starting fresh');
+  } else if(state.activeSession && state.activeSession.workoutId!==workoutId){
+    if(!confirm(`You have an unfinished session for "${state.activeSession.workoutName}". Discard it and start "${w.name}"?`)) return;
   }
+
   state.activeSession = {
     id: uid(), workoutId: w.id, workoutName: w.name, date: new Date().toISOString(),
     exercises: w.exercises.map(ex=>({
       exerciseId: ex.id, name: ex.name, notes:'', weight: ex.weight, reps: ex.reps,
+      startWeight: ex.weight, startReps: ex.reps,
       sets: [], finished:false
     }))
   };
@@ -411,61 +437,66 @@ function renderSession(startIndex){
     el.innerHTML = `<div class="empty-state"><div class="ee">✅</div><div class="el">No active session</div><div>Go to Workouts to start one.</div></div>`;
     return;
   }
-  // header action: finish workout
-  const actionsEl = document.getElementById('topbarActions');
-  const finishBtn = document.createElement('button');
-  finishBtn.className='text-btn accent'; finishBtn.textContent='Finish';
-  finishBtn.onclick = finishWorkout;
-  actionsEl.appendChild(finishBtn);
 
   const restoreIndex = clampNum(startIndex||0, 0, sess.exercises.length-1);
+  const allFinished = sess.exercises.every(e=>e.finished);
   let slides = sess.exercises.map((ex, i)=>renderExerciseCardHTML(ex, i)).join('');
   el.innerHTML = `
+    <div class="eyebrow" id="sessCounter" style="text-align:center;"></div>
     <div class="carousel-wrap">
       <div class="carousel-viewport" id="sessCarouselViewport">
         <div class="carousel-track" id="sessCarouselTrack">${slides}</div>
       </div>
       <div class="dots" id="sessDots"></div>
       <div class="carousel-nav">
-        <button class="nav-arrow" id="sessPrev">‹</button>
-        <button class="nav-arrow" id="sessNext">›</button>
+        <button class="nav-arrow" id="sessPrev" aria-label="Previous exercise">‹</button>
+        <button class="nav-arrow" id="sessNext" aria-label="Next exercise">›</button>
       </div>
     </div>
+    <button class="btn ${allFinished?'positive':'ghost'}" id="sessFinishBottom" style="margin-top:4px;">${allFinished?'✓ Finish Workout':'Finish Workout'}</button>
   `;
+  const updateCounter = (i)=>{
+    const c = document.getElementById('sessCounter');
+    if(c) c.textContent = `Exercise ${i+1} of ${sess.exercises.length}`;
+  };
+  updateCounter(restoreIndex);
   buildDots('sessDots', sess.exercises.length, restoreIndex);
   sessionCarousel = makeCarousel(
     document.getElementById('sessCarouselViewport'),
     document.getElementById('sessCarouselTrack'),
     sess.exercises.length,
-    (i)=>buildDots('sessDots', sess.exercises.length, i),
+    (i)=>{ buildDots('sessDots', sess.exercises.length, i); updateCounter(i); },
     restoreIndex
   );
   document.getElementById('sessPrev').onclick = ()=>sessionCarousel.prev();
   document.getElementById('sessNext').onclick = ()=>sessionCarousel.next();
+  document.getElementById('sessFinishBottom').onclick = finishWorkout;
 
   wireExerciseCards();
 }
 
 function renderExerciseCardHTML(ex, idx){
   const setsHtml = ex.sets.map(s=>`<span class="set-chip">${s.weight}×${s.reps}</span>`).join('');
+  const lastTime = (ex.startWeight!=null) ? `<div class="muted" style="margin-top:-8px; margin-bottom:14px;">Last time: ${ex.startWeight}kg × ${ex.startReps}</div>` : '';
   return `
   <div class="card-slide">
     <div class="ex-card ${ex.finished?'finished':''}" data-idx="${idx}">
       <div class="ex-name">${esc(ex.name)}</div>
+      ${lastTime}
       <div class="field" style="margin-bottom:14px;">
         <textarea data-role="notes" data-idx="${idx}" placeholder="Notes (form cues, how it felt...)" ${ex.finished?'disabled':''}>${esc(ex.notes)}</textarea>
       </div>
       <div class="stepper-label">Weight (kg)</div>
       <div class="stepper-row">
-        <button class="sbtn" data-act="wdown" data-idx="${idx}" ${ex.finished?'disabled':''}>−</button>
+        <button class="sbtn" data-act="wdown" data-idx="${idx}" aria-label="Decrease weight" ${ex.finished?'disabled':''}>−</button>
         <input class="sval mono" type="number" inputmode="decimal" step="0.5" data-role="weight" data-idx="${idx}" value="${ex.weight}" ${ex.finished?'disabled':''}>
-        <button class="sbtn" data-act="wup" data-idx="${idx}" ${ex.finished?'disabled':''}>+</button>
+        <button class="sbtn" data-act="wup" data-idx="${idx}" aria-label="Increase weight" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="stepper-label">Reps</div>
       <div class="stepper-row">
-        <button class="sbtn" data-act="rdown" data-idx="${idx}" ${ex.finished?'disabled':''}>−</button>
+        <button class="sbtn" data-act="rdown" data-idx="${idx}" aria-label="Decrease reps" ${ex.finished?'disabled':''}>−</button>
         <input class="sval mono" type="number" inputmode="numeric" step="1" data-role="reps" data-idx="${idx}" value="${ex.reps}" ${ex.finished?'disabled':''}>
-        <button class="sbtn" data-act="rup" data-idx="${idx}" ${ex.finished?'disabled':''}>+</button>
+        <button class="sbtn" data-act="rup" data-idx="${idx}" aria-label="Increase reps" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="set-log">
         <div class="set-log-title">Logged sets</div>
@@ -476,6 +507,7 @@ function renderExerciseCardHTML(ex, idx){
         <button class="btn positive" data-act="finishex" data-idx="${idx}" ${ex.finished?'disabled':''}>Finish</button>
       </div>
     </div>
+    ${ex.finished ? `<button class="btn ghost" data-act="reopenex" data-idx="${idx}" style="margin-top:10px;">↺ Reopen Exercise</button>` : ''}
   </div>`;
 }
 
@@ -526,6 +558,10 @@ function onExerciseAction(act, idx){
     }
     toast(`${ex.name} finished`);
   }
+  if(act==='reopenex'){
+    ex.finished = false;
+    toast(`${ex.name} reopened`);
+  }
   saveState();
   renderSession(idx);
 }
@@ -573,6 +609,7 @@ function makeCarousel(viewport, track, count, onChange, startIndex){
     onChange && onChange(index);
   }
   viewport.addEventListener('pointerdown', (e)=>{
+    if(e.target.closest('button, input, textarea, select')) return; // let native controls handle their own tap
     dragging = true; startX = e.clientX; dx = 0; width = viewport.clientWidth;
     track.style.transition = 'none';
     viewport.setPointerCapture && viewport.setPointerCapture(e.pointerId);
@@ -610,8 +647,22 @@ function buildDots(containerId, count, active){
    CREATE WORKOUT
    ========================================================= */
 let draftDeck = [];
+let keepName = '';
+let editingWorkoutId = null;
 
-function renderCreate(){
+function renderCreate(workoutId){
+  if(workoutId){
+    const w = state.workouts.find(x=>x.id===workoutId);
+    if(w){
+      editingWorkoutId = w.id;
+      keepName = w.name;
+      draftDeck = w.exercises.map(ex=>({ id: ex.id, name: ex.name, weight: ex.weight, reps: ex.reps }));
+      paintCreate();
+      return;
+    }
+  }
+  editingWorkoutId = null;
+  keepName = '';
   draftDeck = [];
   paintCreate();
 }
@@ -623,7 +674,7 @@ function paintCreate(){
         <div class="di-name">${esc(ex.name)}</div>
         <div class="di-sub">start ${ex.weight}kg × ${ex.reps}</div>
       </div>
-      <button class="li-del" data-rm="${i}">✕</button>
+      <button class="li-del" data-rm="${i}" aria-label="Remove ${esc(ex.name)}">✕</button>
     </div>`).join('');
   el.innerHTML = `
     <div class="field">
@@ -651,21 +702,18 @@ function paintCreate(){
       <button class="btn ghost" id="cw-addex">+ Add Exercise Card</button>
     </div>
 
-    <button class="btn primary" id="cw-save" style="margin-top:6px;">Save Workout</button>
+    <button class="btn primary" id="cw-save" style="margin-top:6px;">${editingWorkoutId ? 'Save Changes' : 'Save Workout'}</button>
   `;
   document.getElementById('cw-addex').onclick = ()=>{
     const name = document.getElementById('cw-exname').value.trim();
     const weight = parseFloat(document.getElementById('cw-exweight').value)||0;
     const reps = parseInt(document.getElementById('cw-exreps').value,10)||0;
     if(!name){ toast('Give the exercise a name'); return; }
-    draftDeck.push({id:uid(), name, weight, reps, notes:''});
+    draftDeck.push({id:uid(), name, weight, reps});
     paintCreate();
-    // restore workout name typed so far
-    const nameInput = document.getElementById('cw-name');
-    if(nameInput) nameInput.value = keepName;
   };
   el.querySelectorAll('[data-rm]').forEach(btn=>{
-    btn.onclick = ()=>{ draftDeck.splice(+btn.dataset.rm,1); paintCreate(); document.getElementById('cw-name').value = keepName; };
+    btn.onclick = ()=>{ draftDeck.splice(+btn.dataset.rm,1); paintCreate(); };
   });
   const nameEl = document.getElementById('cw-name');
   nameEl.value = keepName;
@@ -675,42 +723,53 @@ function paintCreate(){
     const name = document.getElementById('cw-name').value.trim();
     if(!name){ toast('Name your workout first'); return; }
     if(draftDeck.length===0){ toast('Add at least one exercise'); return; }
-    state.workouts.push({ id: uid(), name, exercises: draftDeck.map(x=>({id:x.id, name:x.name, weight:x.weight, reps:x.reps, notes:''})) });
+    const exercises = draftDeck.map(x=>({id:x.id||uid(), name:x.name, weight:x.weight, reps:x.reps, notes:''}));
+    if(editingWorkoutId){
+      const w = state.workouts.find(x=>x.id===editingWorkoutId);
+      if(w){ w.name = name; w.exercises = exercises; }
+      toast('Workout updated');
+    } else {
+      state.workouts.push({ id: uid(), name, exercises });
+      toast('Workout saved');
+    }
     saveState();
-    keepName = '';
-    toast('Workout saved');
+    editingWorkoutId = null; keepName = ''; draftDeck = [];
     navigate('workouts', {}, false);
     history.replaceState({view:'workouts',params:{}}, '', '#workouts');
   };
 }
-let keepName = '';
 
 /* =========================================================
    MEASUREMENTS
    ========================================================= */
 const DEFAULT_PARTS = ['Neck','Chest','Waist','Hips','Left Bicep','Right Bicep','Left Thigh','Right Thigh','Left Calf','Right Calf'];
 let customParts = [];
+let measureDraft = {};
+let measureDate = '';
 
 function renderMeasure(){
   customParts = [];
+  measureDraft = {};
+  measureDate = todayISODate();
   paintMeasure();
 }
 function paintMeasure(){
   const el = document.getElementById('view-measure');
+  const val = (p)=> measureDraft[p]!=null ? measureDraft[p] : '';
   const fieldsHtml = DEFAULT_PARTS.map(p=>`
     <div class="field">
-      <label>${p} (cm)</label>
-      <input type="number" step="0.1" data-part="${esc(p)}" placeholder="—">
+      <label>${esc(p)} (cm)</label>
+      <input type="number" step="0.1" data-part="${esc(p)}" placeholder="—" value="${val(p)}">
     </div>`).join('');
   const customHtml = customParts.map((p,i)=>`
     <div class="field">
-      <label>${esc(p)} (cm) <span style="color:var(--red); cursor:pointer;" data-rmc="${i}">✕</span></label>
-      <input type="number" step="0.1" data-part="${esc(p)}" placeholder="—">
+      <label>${esc(p)} (cm) <button type="button" class="li-del" data-rmc="${i}" aria-label="Remove ${esc(p)}" style="font-size:14px; padding:2px 6px;">✕</button></label>
+      <input type="number" step="0.1" data-part="${esc(p)}" placeholder="—" value="${val(p)}">
     </div>`).join('');
   el.innerHTML = `
     <div class="field">
       <label>Date</label>
-      <input type="date" id="ms-date" value="${todayISODate()}">
+      <input type="date" id="ms-date" value="${measureDate}">
     </div>
     ${fieldsHtml}
     ${customHtml}
@@ -723,14 +782,23 @@ function paintMeasure(){
     </div>
     <button class="btn primary" id="ms-save">Save Measurements</button>
   `;
+  document.getElementById('ms-date').addEventListener('input', (e)=>{ measureDate = e.target.value; });
+  el.querySelectorAll('[data-part]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{ measureDraft[inp.dataset.part] = inp.value; });
+  });
   document.getElementById('ms-addcustom').onclick = ()=>{
     const n = document.getElementById('ms-customname').value.trim();
     if(!n){ toast('Name the measurement'); return; }
+    if(customParts.includes(n) || DEFAULT_PARTS.includes(n)){ toast('That measurement already exists'); return; }
     customParts.push(n);
     paintMeasure();
   };
   el.querySelectorAll('[data-rmc]').forEach(x=>{
-    x.onclick = ()=>{ customParts.splice(+x.dataset.rmc,1); paintMeasure(); };
+    x.onclick = ()=>{
+      const removed = customParts.splice(+x.dataset.rmc, 1);
+      if(removed[0]) delete measureDraft[removed[0]];
+      paintMeasure();
+    };
   });
   document.getElementById('ms-save').onclick = ()=>{
     const date = document.getElementById('ms-date').value || todayISODate();
@@ -745,6 +813,7 @@ function paintMeasure(){
     if(count===0){ toast('Enter at least one measurement'); return; }
     saveState();
     toast(`Saved ${count} measurement${count!==1?'s':''}`);
+    measureDraft = {}; customParts = [];
     navigate('home', {}, false);
     history.replaceState({view:'home',params:{}}, '', '#home');
   };
@@ -775,6 +844,11 @@ function paintProgress(){
   else paintSizeProgress();
 }
 
+function est1RM(weight, reps){
+  if(reps<=1) return weight;
+  return weight * (1 + reps/30);
+}
+
 function paintWorkoutProgress(){
   const body = document.getElementById('prog-body');
   // group by workoutId::exerciseId
@@ -784,8 +858,11 @@ function paintWorkoutProgress(){
       if(ex.sets.length===0) return;
       const key = sess.workoutId+'::'+ex.exerciseId;
       if(!groups[key]) groups[key] = { name: ex.name, workoutName: sess.workoutName, points: [] };
-      const top = ex.sets.reduce((m,s)=> s.weight>m?s.weight:m, 0);
-      groups[key].points.push({ date: new Date(sess.date), value: top });
+      const best = ex.sets.reduce((m,s)=>{
+        const e1 = est1RM(s.weight, s.reps);
+        return e1>m.e ? {e:e1, w:s.weight, r:s.reps} : m;
+      }, {e:-1, w:0, r:0});
+      groups[key].points.push({ date: new Date(sess.date), value: Math.round(best.e*10)/10, w: best.w, r: best.r });
     });
   });
   const keys = Object.keys(groups);
@@ -794,7 +871,7 @@ function paintWorkoutProgress(){
     return;
   }
   keys.forEach(k=> groups[k].points.sort((a,b)=>a.date-b.date));
-  renderProgressCarousel(body, keys.map(k=>groups[k]), 'red');
+  renderProgressCarousel(body, keys.map(k=>groups[k]), 'red', {unit:'kg', metricLabel:'Est. 1RM'});
 }
 
 function paintSizeProgress(){
@@ -810,17 +887,20 @@ function paintSizeProgress(){
     return;
   }
   keys.forEach(k=> groups[k].points.sort((a,b)=>a.date-b.date));
-  renderProgressCarousel(body, keys.map(k=>groups[k]), 'green');
+  renderProgressCarousel(body, keys.map(k=>groups[k]), 'green', {unit:'cm', metricLabel:'Latest'});
 }
 
-function renderProgressCarousel(body, cards, colorName){
+function renderProgressCarousel(body, cards, colorName, opts={}){
   const color = colorName==='green' ? '#7A9B76' : '#E2472B';
+  const unit = opts.unit || '';
+  const metricLabel = opts.metricLabel || 'Latest';
   let slides = cards.map((c,i)=>{
     const pts = c.points;
     const last = pts[pts.length-1];
     const first = pts[0];
     const delta = pts.length>1 ? (last.value-first.value) : 0;
-    const deltaStr = (delta>0?'+':'') + (Math.round(delta*10)/10);
+    const deltaStr = (delta>0?'+':'') + (Math.round(delta*10)/10) + unit;
+    const bestSetLine = (last.w!=null) ? `<div class="muted" style="margin-top:10px; font-size:11px;">Best set that day: ${last.w}kg × ${last.r}</div>` : '';
     return `
     <div class="card-slide">
       <div class="chart-card">
@@ -828,10 +908,11 @@ function renderProgressCarousel(body, cards, colorName){
         <div class="cc-sub">${c.workoutName?esc(c.workoutName)+' · ':''}${pts.length} data point${pts.length!==1?'s':''}</div>
         <canvas class="chart" id="chart-${i}" data-idx="${i}"></canvas>
         <div class="stat-row">
-          <div class="stat"><div class="sv mono">${last.value}</div><div class="sl">Latest</div></div>
+          <div class="stat"><div class="sv mono">${last.value}${unit}</div><div class="sl">${metricLabel}</div></div>
           <div class="stat"><div class="sv mono">${deltaStr}</div><div class="sl">Change</div></div>
           <div class="stat"><div class="sv mono">${fmtDateShort(last.date)}</div><div class="sl">Last logged</div></div>
         </div>
+        ${bestSetLine}
       </div>
     </div>`;
   }).join('');
@@ -840,8 +921,8 @@ function renderProgressCarousel(body, cards, colorName){
       <div class="carousel-viewport" id="progViewport"><div class="carousel-track" id="progTrack">${slides}</div></div>
       <div class="dots" id="progDots"></div>
       <div class="carousel-nav">
-        <button class="nav-arrow" id="progPrev">‹</button>
-        <button class="nav-arrow" id="progNext">›</button>
+        <button class="nav-arrow" id="progPrev" aria-label="Previous card">‹</button>
+        <button class="nav-arrow" id="progNext" aria-label="Next card">›</button>
       </div>
     </div>
   `;
@@ -916,15 +997,16 @@ function drawChart(canvas, points, color){
   ctx.fillText(fmtDateShort(points[points.length-1].date.toISOString()), w-pad.r, h-pad.b+6);
 }
 
+let resizeTimeout;
 window.addEventListener('resize', ()=>{
   if(currentView==='progress'){
-    document.querySelectorAll('canvas.chart').forEach(c=>{});
-    paintProgress();
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(()=>{ paintProgress(); }, 150);
   }
 });
 
 /* =========================================================
-   BACKUP / EXPORT
+   BACKUP / EXPORT / IMPORT
    ========================================================= */
 function renderBackup(){
   const el = document.getElementById('view-backup');
@@ -933,56 +1015,199 @@ function renderBackup(){
   el.innerHTML = `
     <div class="eyebrow">Your data, in your hands</div>
     <div class="h2" style="margin-bottom:14px;">Backup &amp; Export</div>
-    <div class="muted" style="margin-bottom:20px;">Everything lives only on this device. Export a file to keep a backup, move to a new phone, or hand your progress to an LLM to review.</div>
+    <div class="muted" style="margin-bottom:20px;">Everything lives only on this device. Export separate files to inspect, back up, or hand pieces of your progress to an LLM — or import them back in later.</div>
 
     <div class="list-item" style="cursor:default;">
       <div><div class="li-main">${state.workouts.length} workouts</div><div class="li-sub">${sessCount} logged sessions · ${measCount} measurements</div></div>
     </div>
 
-    <button class="btn primary" id="bk-export" style="margin-top:14px;">Export Data (.json file)</button>
+    <div class="eyebrow" style="margin-top:22px;">Export</div>
+    <button class="btn primary" id="bk-export-workouts" style="margin-top:10px;">Export Workouts</button>
+    <button class="btn primary" id="bk-export-sessions" style="margin-top:10px;">Export Workout Progression</button>
+    <button class="btn primary" id="bk-export-measurements" style="margin-top:10px;">Export Weight / Size Progression</button>
     <button class="btn ghost" id="bk-copy" style="margin-top:10px;">Copy Progress Summary as Text</button>
 
+    <div class="eyebrow" style="margin-top:22px;">Import</div>
+    <div class="muted" style="margin-bottom:10px;">Each import replaces only that one category — the others are left untouched.</div>
+    <input type="file" id="bk-file-workouts" accept="application/json" style="display:none;">
+    <button class="btn ghost" id="bk-import-workouts">Import Workouts</button>
+    <input type="file" id="bk-file-sessions" accept="application/json" style="display:none;">
+    <button class="btn ghost" id="bk-import-sessions" style="margin-top:10px;">Import Workout Progression</button>
+    <input type="file" id="bk-file-measurements" accept="application/json" style="display:none;">
+    <button class="btn ghost" id="bk-import-measurements" style="margin-top:10px;">Import Weight / Size Progression</button>
+
     <hr>
-    <div class="eyebrow">Restore</div>
-    <div class="muted" style="margin-bottom:10px;">Importing replaces everything currently on this device.</div>
-    <input type="file" id="bk-file" accept="application/json" style="display:none;">
-    <button class="btn ghost" id="bk-import">Import Data (.json file)</button>
+    <div class="eyebrow">Full Backup</div>
+    <div class="muted" style="margin-bottom:10px;">One file with everything — best for moving to a new phone. Replaces all data on import.</div>
+    <button class="btn ghost" id="bk-export-full">Export Full Backup</button>
+    <input type="file" id="bk-file-full" accept="application/json" style="display:none;">
+    <button class="btn ghost" id="bk-import-full" style="margin-top:10px;">Import Full Backup</button>
   `;
-  document.getElementById('bk-export').onclick = exportData;
+  document.getElementById('bk-export-workouts').onclick = exportWorkouts;
+  document.getElementById('bk-export-sessions').onclick = exportSessions;
+  document.getElementById('bk-export-measurements').onclick = exportMeasurements;
   document.getElementById('bk-copy').onclick = copySummary;
-  document.getElementById('bk-import').onclick = ()=>document.getElementById('bk-file').click();
-  document.getElementById('bk-file').onchange = importData;
+
+  document.getElementById('bk-import-workouts').onclick = ()=>document.getElementById('bk-file-workouts').click();
+  document.getElementById('bk-file-workouts').onchange = importWorkoutsFile;
+  document.getElementById('bk-import-sessions').onclick = ()=>document.getElementById('bk-file-sessions').click();
+  document.getElementById('bk-file-sessions').onchange = importSessionsFile;
+  document.getElementById('bk-import-measurements').onclick = ()=>document.getElementById('bk-file-measurements').click();
+  document.getElementById('bk-file-measurements').onchange = importMeasurementsFile;
+
+  document.getElementById('bk-export-full').onclick = exportFullBackup;
+  document.getElementById('bk-import-full').onclick = ()=>document.getElementById('bk-file-full').click();
+  document.getElementById('bk-file-full').onchange = importFullBackup;
 }
 
-function exportData(){
-  const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'});
+function downloadJSON(filename, obj){
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `racked-backup-${todayISODate()}.json`;
+  a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  toast('Backup downloaded');
+}
+function readJSONFile(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>{ try{ resolve(JSON.parse(reader.result)); }catch(e){ reject(e); } };
+    reader.onerror = ()=>reject(new Error('read failed'));
+    reader.readAsText(file);
+  });
 }
 
-function importData(e){
-  const file = e.target.files[0];
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    try{
-      const parsed = JSON.parse(reader.result);
-      if(!parsed || !Array.isArray(parsed.workouts)) throw new Error('bad shape');
-      if(!confirm('Replace all current data with this backup?')) return;
-      state = Object.assign(defaultState(), parsed);
-      saveState();
-      toast('Data restored');
-      navigate('home', {}, false);
-      history.replaceState({view:'home',params:{}}, '', '#home');
-    }catch(err){
-      alert('That file could not be read as a Racked backup.');
-    }
-  };
-  reader.readAsText(file);
+/* ---- Export: one category per file ---- */
+function exportWorkouts(){
+  downloadJSON(`racked-workouts-${todayISODate()}.json`,
+    { type:'racked-workouts', version:1, exportedAt:new Date().toISOString(), workouts: state.workouts });
+  toast('Workouts exported');
+}
+function exportSessions(){
+  downloadJSON(`racked-workout-progression-${todayISODate()}.json`,
+    { type:'racked-sessions', version:1, exportedAt:new Date().toISOString(), sessions: state.sessions });
+  toast('Workout progression exported');
+}
+function exportMeasurements(){
+  downloadJSON(`racked-size-progression-${todayISODate()}.json`,
+    { type:'racked-measurements', version:1, exportedAt:new Date().toISOString(), measurements: state.measurements });
+  toast('Measurements exported');
+}
+function exportFullBackup(){
+  downloadJSON(`racked-backup-${todayISODate()}.json`, state);
+  toast('Full backup downloaded');
+}
+
+/* ---- Normalizers: tolerate hand-edited files, keep existing ids when present ---- */
+function normalizeWorkouts(arr){
+  return arr.map(w=>({
+    id: w.id || uid(),
+    name: String(w.name||'Untitled'),
+    exercises: (Array.isArray(w.exercises)?w.exercises:[]).map(ex=>({
+      id: ex.id || uid(),
+      name: String(ex.name||'Exercise'),
+      weight: Number(ex.weight)||0,
+      reps: Math.round(Number(ex.reps))||0,
+      notes: ex.notes || ''
+    }))
+  }));
+}
+function normalizeSessions(arr){
+  return arr.map(s=>({
+    id: s.id || uid(),
+    workoutId: s.workoutId || uid(),
+    workoutName: s.workoutName || 'Workout',
+    date: s.date || new Date().toISOString(),
+    exercises: (Array.isArray(s.exercises)?s.exercises:[]).map(ex=>({
+      exerciseId: ex.exerciseId || uid(),
+      name: ex.name || 'Exercise',
+      notes: ex.notes || '',
+      finished: !!ex.finished,
+      sets: (Array.isArray(ex.sets)?ex.sets:[]).map(st=>({
+        weight: Number(st.weight)||0, reps: Math.round(Number(st.reps))||0, time: st.time || new Date().toISOString()
+      }))
+    }))
+  }));
+}
+function normalizeMeasurements(arr){
+  return arr.map(m=>({
+    id: m.id || uid(),
+    date: m.date || todayISODate(),
+    part: String(m.part||'Measurement'),
+    value: Number(m.value)||0
+  }));
+}
+
+/* ---- Import: one category per file, everything else untouched ---- */
+async function importWorkoutsFile(e){
+  const file = e.target.files[0]; if(!file){ return; }
+  try{
+    const parsed = await readJSONFile(file);
+    if(!Array.isArray(parsed.workouts)) throw new Error('bad shape');
+    const incoming = normalizeWorkouts(parsed.workouts);
+    if(!confirm(`Replace your current ${state.workouts.length} workouts with the ${incoming.length} workouts in this file? Session history and measurements are not affected.`)){ e.target.value=''; return; }
+    state.workouts = incoming;
+    saveState();
+    toast('Workouts imported');
+    renderBackup();
+  }catch(err){
+    alert("That file doesn't look like a Racked workouts export.");
+  }
+  e.target.value = '';
+}
+async function importSessionsFile(e){
+  const file = e.target.files[0]; if(!file){ return; }
+  try{
+    const parsed = await readJSONFile(file);
+    if(!Array.isArray(parsed.sessions)) throw new Error('bad shape');
+    const incoming = normalizeSessions(parsed.sessions);
+    if(!confirm(`Replace your current ${state.sessions.length} logged sessions with the ${incoming.length} sessions in this file? Workouts and measurements are not affected.`)){ e.target.value=''; return; }
+    state.sessions = incoming;
+    saveState();
+    toast('Workout progression imported');
+    renderBackup();
+  }catch(err){
+    alert("That file doesn't look like a Racked workout progression export.");
+  }
+  e.target.value = '';
+}
+async function importMeasurementsFile(e){
+  const file = e.target.files[0]; if(!file){ return; }
+  try{
+    const parsed = await readJSONFile(file);
+    if(!Array.isArray(parsed.measurements)) throw new Error('bad shape');
+    const incoming = normalizeMeasurements(parsed.measurements);
+    if(!confirm(`Replace your current ${state.measurements.length} measurements with the ${incoming.length} measurements in this file? Workouts and session history are not affected.`)){ e.target.value=''; return; }
+    state.measurements = incoming;
+    saveState();
+    toast('Measurements imported');
+    renderBackup();
+  }catch(err){
+    alert("That file doesn't look like a Racked measurements export.");
+  }
+  e.target.value = '';
+}
+async function importFullBackup(e){
+  const file = e.target.files[0]; if(!file){ return; }
+  try{
+    const parsed = await readJSONFile(file);
+    if(!parsed || !Array.isArray(parsed.workouts)) throw new Error('bad shape');
+    if(!confirm('Replace ALL current data (workouts, sessions, measurements) with this backup?')){ e.target.value=''; return; }
+    const next = defaultState();
+    next.workouts = normalizeWorkouts(parsed.workouts || []);
+    next.sessions = normalizeSessions(parsed.sessions || []);
+    next.measurements = normalizeMeasurements(parsed.measurements || []);
+    next.activeSession = (parsed.activeSession && Array.isArray(parsed.activeSession.exercises))
+      ? normalizeSessions([parsed.activeSession])[0] : null;
+    state = next;
+    saveState();
+    toast('Full backup restored');
+    navigate('home', {}, false);
+    history.replaceState({view:'home',params:{}}, '', '#home');
+  }catch(err){
+    alert('That file could not be read as a Racked full backup.');
+  }
+  e.target.value = '';
 }
 
 function copySummary(){
