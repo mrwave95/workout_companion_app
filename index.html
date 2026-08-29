@@ -43,6 +43,18 @@
     border-bottom:1px solid var(--border); flex-shrink:0; min-height:24px;
   }
   #topbar h1{ font-size:15px; margin:0; letter-spacing:.08em; text-transform:uppercase; font-weight:800; }
+  /* Home screen: topbar moves to the bottom, title shrinks/mutes and moves to the right */
+  #app.bar-bottom #topbar{
+    order:2; border-bottom:none; border-top:1px solid var(--border);
+    padding: 12px 18px calc(12px + var(--safe-bottom));
+  }
+  #app.bar-bottom #viewport{ order:1; padding-top: calc(14px + var(--safe-top)); }
+  #app.bar-bottom #topbarTitle{
+    order:2; display:flex; align-items:baseline; gap:6px;
+    font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);
+  }
+  #app.bar-bottom #topbarActions{ order:1; }
+  .version-tag{ font-size:10px; font-weight:600; letter-spacing:.04em; color:var(--text-muted); opacity:.7; text-transform:none; }
   .icon-btn{
     background:none; border:1px solid var(--border); color:var(--text); border-radius:10px;
     width:38px; height:38px; display:flex; align-items:center; justify-content:center;
@@ -211,6 +223,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
+const APP_VERSION = '1.0';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -277,17 +290,13 @@ function render(){
   VIEWS.forEach(v=>{
     document.getElementById('view-'+v).classList.toggle('active', v===currentView);
   });
+  document.getElementById('app').classList.toggle('bar-bottom', currentView==='home');
   const titleEl = document.getElementById('topbarTitle');
   const actionsEl = document.getElementById('topbarActions');
   actionsEl.innerHTML = '';
 
   if(currentView==='home'){
-    titleEl.textContent = 'Racked';
-    const backupBtn = document.createElement('button');
-    backupBtn.className='icon-btn'; backupBtn.title='Backup'; backupBtn.textContent='⇅';
-    backupBtn.setAttribute('aria-label','Backup and export');
-    backupBtn.onclick = ()=>navigate('backup');
-    actionsEl.appendChild(backupBtn);
+    titleEl.innerHTML = `Racked<span class="version-tag">v${esc(APP_VERSION)}</span>`;
     renderHome();
   } else {
     const back = document.createElement('button');
@@ -332,11 +341,17 @@ function renderHome(){
       <div class="t-label">Progression</div>
       <div class="t-sub">Charts for lifts and body size</div>
     </button>
+    <button type="button" class="tile c-muted" id="t-backup">
+      <div class="t-bar"></div>
+      <div class="t-label">Backup &amp; Export</div>
+      <div class="t-sub">Save, share, or restore your data</div>
+    </button>
   `;
   document.getElementById('t-workouts').onclick = ()=>navigate('workouts');
   document.getElementById('t-create').onclick = ()=>navigate('create');
   document.getElementById('t-measure').onclick = ()=>navigate('measure');
   document.getElementById('t-progress').onclick = ()=>navigate('progress');
+  document.getElementById('t-backup').onclick = ()=>navigate('backup');
 }
 
 /* =========================================================
