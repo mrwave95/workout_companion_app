@@ -1,4 +1,4 @@
-const CACHE_NAME = 'racked-cache-v3';
+const CACHE_NAME = 'racked-cache-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -21,18 +21,17 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Cache-first, falling back to network, so the app works fully offline
-// once it has been opened at least once.
+// Network-first, falling back to cache only when there's truly no connection.
+// This means: whenever there's any connectivity, you always get the current
+// version straight from GitHub Pages, with no update lag. Offline still works
+// exactly as before, using whatever was last successfully fetched.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
-      }).catch(() => cached);
-    })
+    fetch(event.request).then((response) => {
+      const copy = response.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+      return response;
+    }).catch(() => caches.match(event.request))
   );
 });
