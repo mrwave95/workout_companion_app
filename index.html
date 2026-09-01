@@ -191,6 +191,15 @@
   .deck-item .di-name{ font-weight:700; font-size:14px; }
   .deck-item .di-sub{ font-size:12px; color:var(--text-muted); margin-top:2px; font-family:ui-monospace,monospace; }
   .inline-form{ background:var(--surface); border:1px dashed var(--border); border-radius:14px; padding:16px; margin-bottom:16px; }
+  .suggest-list{ margin-top:8px; border-radius:10px; overflow:hidden; }
+  .suggest-list:empty{ margin:0; }
+  .suggest-item{
+    display:block; width:100%; text-align:left; background:var(--surface-raised); border:none; border-bottom:1px solid var(--border);
+    padding:11px 14px; color:var(--text); font-size:14px; font-family:inherit; cursor:pointer;
+  }
+  .suggest-item:first-child{ border-top:1px solid var(--border); border-top-left-radius:10px; border-top-right-radius:10px; }
+  .suggest-item:last-child{ border-bottom:1px solid var(--border); border-bottom-left-radius:10px; border-bottom-right-radius:10px; }
+  .suggest-item:active{ background:var(--border); }
 
   /* ---------- Toast ---------- */
   #toast{ position:fixed; left:50%; bottom: calc(24px + var(--safe-bottom)); transform:translate(-50%, 20px); background:var(--surface-raised); border:1px solid var(--border); color:var(--text); padding:12px 18px; border-radius:12px; font-size:13px; font-weight:600; opacity:0; transition:.25s; pointer-events:none; z-index:50; max-width:85vw; text-align:center; }
@@ -223,7 +232,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.0';
+const APP_VERSION = '1.1.0';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -665,6 +674,44 @@ let draftDeck = [];
 let keepName = '';
 let editingWorkoutId = null;
 
+// Every exercise name the user has ever used, deduped case-insensitively.
+// When the same name exists in different casings, the most recently logged
+// casing wins, so the suggestion nudges toward the name actually in use.
+function getKnownExerciseNames(){
+  const seen = new Map(); // lowercase -> canonical display form
+  const byRecency = [...state.sessions].sort((a,b)=> new Date(b.date) - new Date(a.date));
+  byRecency.forEach(s=>{
+    s.exercises.forEach(ex=>{
+      const key = (ex.name||'').trim().toLowerCase();
+      if(key && !seen.has(key)) seen.set(key, ex.name.trim());
+    });
+  });
+  state.workouts.forEach(w=>{
+    w.exercises.forEach(ex=>{
+      const key = (ex.name||'').trim().toLowerCase();
+      if(key && !seen.has(key)) seen.set(key, ex.name.trim());
+    });
+  });
+  return Array.from(seen.values());
+}
+
+function renderExerciseSuggestions(query, box, inputEl){
+  const q = query.trim().toLowerCase();
+  if(!q){ box.innerHTML=''; return; }
+  const matches = getKnownExerciseNames()
+    .filter(n => n.toLowerCase().includes(q))
+    .slice(0, 6);
+  if(matches.length===0){ box.innerHTML=''; return; }
+  box.innerHTML = matches.map(n=>`<button type="button" class="suggest-item">${esc(n)}</button>`).join('');
+  box.querySelectorAll('.suggest-item').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      inputEl.value = btn.textContent;
+      box.innerHTML = '';
+      inputEl.focus();
+    });
+  });
+}
+
 function renderCreate(workoutId){
   if(workoutId){
     const w = state.workouts.find(x=>x.id===workoutId);
@@ -702,7 +749,8 @@ function paintCreate(){
     <div class="inline-form">
       <div class="field">
         <label>Exercise name</label>
-        <input type="text" id="cw-exname" placeholder="e.g. Back Squat">
+        <input type="text" id="cw-exname" placeholder="e.g. Back Squat" autocomplete="off">
+        <div id="cw-exname-suggest" class="suggest-list"></div>
       </div>
       <div class="grid2">
         <div class="field">
@@ -727,6 +775,10 @@ function paintCreate(){
     draftDeck.push({id:uid(), name, weight, reps});
     paintCreate();
   };
+  const exNameEl = document.getElementById('cw-exname');
+  const suggestBox = document.getElementById('cw-exname-suggest');
+  exNameEl.addEventListener('input', ()=> renderExerciseSuggestions(exNameEl.value, suggestBox, exNameEl));
+  exNameEl.addEventListener('blur', ()=> setTimeout(()=>{ suggestBox.innerHTML=''; }, 150));
   el.querySelectorAll('[data-rm]').forEach(btn=>{
     btn.onclick = ()=>{ draftDeck.splice(+btn.dataset.rm,1); paintCreate(); };
   });
