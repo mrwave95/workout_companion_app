@@ -232,7 +232,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -809,7 +809,7 @@ function paintCreate(){
 /* =========================================================
    MEASUREMENTS
    ========================================================= */
-const DEFAULT_PARTS = ['Neck','Chest','Waist','Hips','Left Bicep','Right Bicep','Left Thigh','Right Thigh','Left Calf','Right Calf'];
+const DEFAULT_PARTS = ['Upper arm','Waist','Hip','Thigh','Forearm','Chest','Calf'];
 let customParts = [];
 let measureDraft = {};
 let measureDate = '';
