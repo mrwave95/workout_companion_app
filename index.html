@@ -171,7 +171,8 @@
   .stepper-label{ text-align:center; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); font-weight:700; }
   .set-log{ margin-top:6px; margin-bottom:14px; }
   .set-log-title{ font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:8px; }
-  .set-chip{ display:inline-block; background:var(--surface-raised); border:1px solid var(--border); border-radius:20px; padding:6px 12px; font-size:13px; font-family: ui-monospace, monospace; margin:0 6px 6px 0; }
+  .set-chip{ display:inline-block; background:var(--surface-raised); border:1px solid var(--border); border-radius:20px; padding:6px 12px; font-size:13px; font-family: ui-monospace, monospace; margin:0 6px 6px 0; color:var(--text); cursor:pointer; -webkit-appearance:none; appearance:none; }
+  .set-chip:active{ background:var(--border); }
 
   /* ---------- Progression ---------- */
   .seg{ display:flex; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:4px; margin-bottom:18px; }
@@ -203,6 +204,10 @@
 
   /* ---------- Toast ---------- */
   #toast{ position:fixed; left:50%; bottom: calc(24px + var(--safe-bottom)); transform:translate(-50%, 20px); background:var(--surface-raised); border:1px solid var(--border); color:var(--text); padding:12px 18px; border-radius:12px; font-size:13px; font-weight:600; opacity:0; transition:.25s; pointer-events:none; z-index:50; max-width:85vw; text-align:center; }
+  .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-end; justify-content:center; z-index:80; }
+  .modal-overlay.show{ display:flex; }
+  .modal-card{ background:var(--surface); border:1px solid var(--border); border-bottom:none; border-radius:20px 20px 0 0; padding:22px 20px calc(22px + var(--safe-bottom)); width:100%; max-width:480px; animation: slideUp .18s ease; }
+  @keyframes slideUp{ from{ transform:translateY(24px); opacity:0; } to{ transform:none; opacity:1; } }
   #toast.show{ opacity:1; transform:translate(-50%,0); }
 
   a{ color:var(--blue); }
@@ -223,6 +228,9 @@
   </main>
 </div>
 <div id="toast"></div>
+<div id="modalOverlay" class="modal-overlay">
+  <div class="modal-card" id="modalCard"></div>
+</div>
 
 <script>
 (function(){
@@ -232,7 +240,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -277,6 +285,18 @@ function toast(msg){
   toast._h = setTimeout(()=>t.classList.remove('show'), 1800);
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function showModal(html){
+  document.getElementById('modalCard').innerHTML = html;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+function hideModal(){
+  document.getElementById('modalOverlay').classList.remove('show');
+  document.getElementById('modalCard').innerHTML = '';
+}
+document.getElementById('modalOverlay').addEventListener('click', (e)=>{
+  if(e.target.id==='modalOverlay') hideModal();
+});
 
 /* =========================================================
    ROUTER
@@ -500,7 +520,7 @@ function renderSession(startIndex){
 }
 
 function renderExerciseCardHTML(ex, idx){
-  const setsHtml = ex.sets.map(s=>`<span class="set-chip">${s.weight}×${s.reps}</span>`).join('');
+  const setsHtml = ex.sets.map((s,si)=>`<button type="button" class="set-chip" data-exidx="${idx}" data-setidx="${si}">${s.weight}×${s.reps}</button>`).join('');
   const lastTime = (ex.startWeight!=null) ? `<div class="muted" style="margin-top:-8px; margin-bottom:14px;">Last time: ${ex.startWeight}kg × ${ex.startReps}</div>` : '';
   return `
   <div class="card-slide">
@@ -523,7 +543,7 @@ function renderExerciseCardHTML(ex, idx){
         <button class="sbtn" data-act="rup" data-idx="${idx}" aria-label="Increase reps" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="set-log">
-        <div class="set-log-title">Logged sets</div>
+        <div class="set-log-title">Logged sets ${ex.sets.length ? '<span class="muted" style="font-weight:400; text-transform:none; letter-spacing:0;">(tap to edit)</span>' : ''}</div>
         <div>${setsHtml || '<span class="muted">None yet</span>'}</div>
       </div>
       <div class="row-btns">
@@ -558,12 +578,73 @@ function wireExerciseCards(){
   root.querySelectorAll('[data-act]').forEach(btn=>{
     btn.addEventListener('click', ()=>onExerciseAction(btn.dataset.act, +btn.dataset.idx));
   });
+  root.querySelectorAll('.set-chip').forEach(btn=>{
+    btn.addEventListener('click', ()=> openEditSetModal(+btn.dataset.exidx, +btn.dataset.setidx));
+  });
+}
+
+// If the exercise has already been finished, keep the workout's stored
+// "last weight/reps" default in sync with whatever the last set now is,
+// so an edit or delete after finishing isn't silently overridden next time.
+function syncWorkoutDefaultsIfFinished(exIdx){
+  const ex = state.activeSession.exercises[exIdx];
+  if(!ex.finished || ex.sets.length===0) return;
+  const last = ex.sets[ex.sets.length-1];
+  const w = state.workouts.find(w=>w.id===state.activeSession.workoutId);
+  if(w){
+    const wex = w.exercises.find(e=>e.id===ex.exerciseId);
+    if(wex){ wex.weight = last.weight; wex.reps = last.reps; }
+  }
+}
+
+function openEditSetModal(exIdx, setIdx){
+  const ex = state.activeSession.exercises[exIdx];
+  const s = ex.sets[setIdx];
+  if(!s) return;
+  showModal(`
+    <div class="eyebrow">Edit Set</div>
+    <div class="h2" style="margin-bottom:16px;">${esc(ex.name)}</div>
+    <div class="grid2">
+      <div class="field">
+        <label>Weight (kg)</label>
+        <input type="number" step="0.5" inputmode="decimal" id="modal-set-weight" value="${s.weight}">
+      </div>
+      <div class="field">
+        <label>Reps</label>
+        <input type="number" step="1" inputmode="numeric" id="modal-set-reps" value="${s.reps}">
+      </div>
+    </div>
+    <button class="btn primary" id="modal-set-save">Save Changes</button>
+    <button class="btn ghost" id="modal-set-delete" style="margin-top:10px; color:var(--red);">Delete Set</button>
+    <button class="btn ghost" id="modal-set-cancel" style="margin-top:10px;">Cancel</button>
+  `);
+  document.getElementById('modal-set-save').onclick = ()=>{
+    const w = parseFloat(document.getElementById('modal-set-weight').value);
+    const r = parseInt(document.getElementById('modal-set-reps').value, 10);
+    if(isNaN(w) || isNaN(r)){ toast('Enter a valid weight and reps'); return; }
+    ex.sets[setIdx] = { ...s, weight:w, reps:r };
+    syncWorkoutDefaultsIfFinished(exIdx);
+    saveState();
+    hideModal();
+    renderSession(exIdx);
+    toast('Set updated');
+  };
+  document.getElementById('modal-set-delete').onclick = ()=>{
+    if(!confirm('Delete this set?')) return;
+    ex.sets.splice(setIdx, 1);
+    syncWorkoutDefaultsIfFinished(exIdx);
+    saveState();
+    hideModal();
+    renderSession(exIdx);
+    toast('Set deleted');
+  };
+  document.getElementById('modal-set-cancel').onclick = hideModal;
 }
 
 function onExerciseAction(act, idx){
   const ex = state.activeSession.exercises[idx];
-  if(act==='wup') ex.weight = Math.round((ex.weight + 2.5)*10)/10;
-  if(act==='wdown') ex.weight = Math.max(0, Math.round((ex.weight - 2.5)*10)/10);
+  if(act==='wup') ex.weight = Math.round((ex.weight + 0.5)*10)/10;
+  if(act==='wdown') ex.weight = Math.max(0, Math.round((ex.weight - 0.5)*10)/10);
   if(act==='rup') ex.reps = ex.reps + 1;
   if(act==='rdown') ex.reps = Math.max(0, ex.reps - 1);
   if(act==='logset'){
@@ -572,14 +653,7 @@ function onExerciseAction(act, idx){
   }
   if(act==='finishex'){
     ex.finished = true;
-    if(ex.sets.length>0){
-      const last = ex.sets[ex.sets.length-1];
-      const w = state.workouts.find(w=>w.id===state.activeSession.workoutId);
-      if(w){
-        const wex = w.exercises.find(e=>e.id===ex.exerciseId);
-        if(wex){ wex.weight = last.weight; wex.reps = last.reps; }
-      }
-    }
+    syncWorkoutDefaultsIfFinished(idx);
     toast(`${ex.name} finished`);
   }
   if(act==='reopenex'){
