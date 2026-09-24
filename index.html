@@ -240,7 +240,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -994,11 +994,17 @@ function paintWorkoutProgress(){
   const body = document.getElementById('prog-body');
   // group by workoutId::exerciseId
   const groups = {};
-  state.sessions.forEach(sess=>{
+  const sortedSessions = [...state.sessions].sort((a,b)=> new Date(a.date) - new Date(b.date));
+  sortedSessions.forEach(sess=>{
     sess.exercises.forEach(ex=>{
       if(ex.sets.length===0) return;
       const key = sess.workoutId+'::'+ex.exerciseId;
       if(!groups[key]) groups[key] = { name: ex.name, workoutName: sess.workoutName, points: [] };
+      // Sessions are processed oldest-first, so re-assigning the label on every
+      // match means it ends up reflecting the most recently logged name/workout,
+      // rather than staying stuck on whatever the very first session called it.
+      groups[key].name = ex.name;
+      groups[key].workoutName = sess.workoutName;
       const best = ex.sets.reduce((m,s)=>{
         const e1 = est1RM(s.weight, s.reps);
         return e1>m.e ? {e:e1, w:s.weight, r:s.reps} : m;
