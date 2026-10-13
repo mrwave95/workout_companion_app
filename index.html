@@ -183,6 +183,15 @@
   .chart-card .cc-title{ font-size:18px; font-weight:800; text-transform:uppercase; margin:0; }
   .chart-card .cc-sub{ font-size:12px; color:var(--text-muted); margin:2px 0 14px; }
   canvas.chart{ width:100%; height:180px; display:block; }
+  .entry-list{ margin-top:4px; }
+  .entry-row{
+    display:flex; justify-content:space-between; align-items:center; width:100%; text-align:left;
+    background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:13px 14px; margin-bottom:8px;
+    color:var(--text); font-family:inherit; font-size:14px; cursor:pointer; -webkit-appearance:none; appearance:none;
+  }
+  .entry-row:active{ background:var(--surface-raised); }
+  .entry-row .er-date{ color:var(--text-muted); font-size:13px; }
+  .entry-row .er-val{ font-family:ui-monospace,"SF Mono","Roboto Mono",monospace; font-weight:700; }
   .stat-row{ display:flex; gap:20px; margin-top:14px; }
   .stat{ flex:1; }
   .stat .sv{ font-family: ui-monospace, monospace; font-size:20px; font-weight:700; }
@@ -247,7 +256,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -1052,8 +1061,10 @@ function paintMeasure(){
    ========================================================= */
 let progTab = 'workout';
 let progCarousel = null;
+let sizeCardIndex = 0;
 
 function renderProgress(){
+  sizeCardIndex = 0;
   paintProgress();
 }
 function paintProgress(){
@@ -1125,7 +1136,76 @@ function paintSizeProgress(){
     return;
   }
   keys.forEach(k=> groups[k].points.sort((a,b)=>a.date-b.date));
-  renderProgressCarousel(body, keys.map(k=>groups[k]), 'green', {unit:'cm', metricLabel:'Latest'});
+  const cards = keys.map(k=>groups[k]);
+  sizeCardIndex = clampNum(sizeCardIndex, 0, cards.length-1);
+  renderProgressCarousel(body, cards, 'green', {
+    unit:'cm', metricLabel:'Latest',
+    startIndex: sizeCardIndex,
+    afterHtml: '<div id="size-entries" class="entry-list"></div>',
+    onChange: (i)=>{ sizeCardIndex = i; renderSizeEntries(cards[i].name); }
+  });
+}
+
+// The saved entries for one body part, newest first. Tapping a row opens the editor.
+function renderSizeEntries(part){
+  const box = document.getElementById('size-entries');
+  if(!box) return;
+  const rows = state.measurements
+    .filter(m=>m.part===part)
+    .sort((a,b)=> new Date(b.date) - new Date(a.date));
+  box.innerHTML = `
+    <div class="eyebrow" style="margin:4px 0 10px;">Entries · ${esc(part)} <span style="text-transform:none; letter-spacing:0; font-weight:400;">(tap to edit)</span></div>
+    ${rows.map(m=>`
+      <button type="button" class="entry-row" data-mid="${esc(m.id)}">
+        <span class="er-date">${fmtDateFull(m.date)}</span>
+        <span class="er-val">${m.value} cm</span>
+      </button>`).join('')}
+  `;
+  box.querySelectorAll('.entry-row').forEach(btn=>{
+    btn.addEventListener('click', ()=> openEditMeasurementModal(btn.dataset.mid));
+  });
+}
+
+function openEditMeasurementModal(id){
+  const m = state.measurements.find(x=>x.id===id);
+  if(!m) return;
+  showModal(`
+    <div class="eyebrow">Edit Measurement</div>
+    <div class="h2" style="margin-bottom:16px;">${esc(m.part)}</div>
+    <div class="grid2">
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="modal-m-date" value="${esc(String(m.date).slice(0,10))}">
+      </div>
+      <div class="field">
+        <label>Value (cm)</label>
+        <input type="number" step="0.1" inputmode="decimal" id="modal-m-value" value="${m.value}">
+      </div>
+    </div>
+    <button class="btn primary" id="modal-m-save">Save Changes</button>
+    <button class="btn ghost" id="modal-m-delete" style="margin-top:10px; color:var(--red);">Delete Entry</button>
+    <button class="btn ghost" id="modal-m-cancel" style="margin-top:10px;">Cancel</button>
+  `);
+  document.getElementById('modal-m-save').onclick = ()=>{
+    const v = parseFloat(document.getElementById('modal-m-value').value);
+    const d = document.getElementById('modal-m-date').value;
+    if(isNaN(v) || !d){ toast('Enter a date and a valid value'); return; }
+    m.value = v;
+    m.date = d;
+    saveState();
+    hideModal();
+    paintProgress();
+    toast('Measurement updated');
+  };
+  document.getElementById('modal-m-delete').onclick = ()=>{
+    if(!confirm('Delete this entry?')) return;
+    state.measurements = state.measurements.filter(x=>x.id!==id);
+    saveState();
+    hideModal();
+    paintProgress();
+    toast('Entry deleted');
+  };
+  document.getElementById('modal-m-cancel').onclick = hideModal;
 }
 
 function renderProgressCarousel(body, cards, colorName, opts={}){
@@ -1154,6 +1234,7 @@ function renderProgressCarousel(body, cards, colorName, opts={}){
       </div>
     </div>`;
   }).join('');
+  const startIndex = clampNum(opts.startIndex||0, 0, cards.length-1);
   body.innerHTML = `
     <div class="carousel-wrap">
       <div class="carousel-viewport" id="progViewport"><div class="carousel-track" id="progTrack">${slides}</div></div>
@@ -1163,12 +1244,15 @@ function renderProgressCarousel(body, cards, colorName, opts={}){
         <button class="nav-arrow" id="progNext" aria-label="Next card">›</button>
       </div>
     </div>
+    ${opts.afterHtml || ''}
   `;
-  buildDots('progDots', cards.length, 0);
+  buildDots('progDots', cards.length, startIndex);
   progCarousel = makeCarousel(
     document.getElementById('progViewport'), document.getElementById('progTrack'), cards.length,
-    (i)=>buildDots('progDots', cards.length, i)
+    (i)=>{ buildDots('progDots', cards.length, i); if(opts.onChange) opts.onChange(i); },
+    startIndex
   );
+  if(opts.onChange) opts.onChange(startIndex);
   document.getElementById('progPrev').onclick = ()=>progCarousel.prev();
   document.getElementById('progNext').onclick = ()=>progCarousel.next();
 
