@@ -50,3 +50,7 @@ WebKit installation was attempted with TLS verification intact, but the environm
 On supported iPhone/iPad Safari and a Home Screen installation, verify installation/icons/scope, saved sets/notes after restart, multiple-tab ownership transfer, background/back-navigation behavior, update then offline relaunch, JSON import/export through Files, cancel/recovery/quota paths, virtual-keyboard/rotation/zoom/VoiceOver, and data expectations between separate storage contexts. Neither localStorage nor CacheStorage is a permanent backup.
 
 Remaining opportunities are duplicate-ID diagnostics, accessible chart tables and measured large-history storage/rendering work. They do not justify a framework, storage migration or speculative optimization now. No PR, merge, deployment or live-infrastructure change was made during this size review.
+
+## Publishing preparation
+
+The repository previously contained no publishing workflow or file filter; the original `main` tree contained only the five runtime assets. Live Pages settings could not be inspected because `api.github.com` was blocked. The proposed manual-only Pages workflow runs the existing checks and publishes an explicit five-file artifact without modifying asset bytes or relative paths. It cannot deploy from the review branch or on push/PR events. If the current source is branch-based, approve switching Pages Source to GitHub Actions before merging, retain domain/URL settings, and dispatch publishing only after explicit deployment approval. This task has not changed live settings or deployed.

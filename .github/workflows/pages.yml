@@ -1,0 +1,50 @@
+name: Publish Racked to GitHub Pages
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: I approve publishing the default branch to GitHub Pages
+        required: true
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: ${{ inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm test
+      - run: node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs
+        env:
+          RACKED_TEST_BROWSER: webkit
+      - name: Stage runtime files only
+        run: |
+          mkdir "$RUNNER_TEMP/racked-site"
+          cp index.html sw.js manifest.json icon-192.png icon-512.png "$RUNNER_TEMP/racked-site/"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/racked-site
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy approved artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
