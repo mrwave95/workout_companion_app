@@ -53,6 +53,12 @@ async function open(t, state=blank(), options={}){
 async function saved(page){return page.evaluate(()=>JSON.parse(localStorage.getItem('racked_state_v1')));}
 async function importFile(page,id,value){
   await page.locator(id).setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
+  // FileReader, replacement confirmation and persistence happen asynchronously.
+  // A reload must not abort the import while the input still holds the file.
+  await page.waitForFunction(selector=>{
+    const input=document.querySelector(selector);
+    return !input || input.value==='';
+  },id);
 }
 
 test('workout creation, session sets, edit/delete/reopen, defaults and persistence',async t=>{

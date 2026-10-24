@@ -10,7 +10,7 @@ function runtime(initial=empty()){
   const values = new Map(initial===undefined ? [] : [['racked_state_v1',typeof initial==='string' ? initial : JSON.stringify(initial)]]);
   const alerts=[]; let failing=false; const confirmations=[]; const successes=[];
   const context=vm.createContext({console:{error(){}},localStorage:{getItem:key=>values.get(key)??null,setItem(key,value){if(failing)throw new Error('QuotaExceededError');values.set(key,value);}},alert:message=>alerts.push(message),confirm:message=>{confirmations.push(message);return true;},uid:()=>`generated-${Math.random()}`,todayISODate:()=> '2026-10-24',toast:message=>successes.push(message),renderBackup(){},navigate(){},history:{replaceState(){}}});
-  vm.runInContext(`${storage}\n${data}\nreadJSONFile=async file=>file;`,context);
+  vm.runInContext(`${storage}\n${data}\nhasWriteLock=true; readJSONFile=async file=>file;`,context);
   return {context,values,alerts,confirmations,successes,run:code=>vm.runInContext(code,context),failWrites:()=>{failing=true;}};
 }
 function plain(value){return JSON.parse(JSON.stringify(value));}

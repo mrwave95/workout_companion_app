@@ -224,12 +224,16 @@
   #toast{ position:fixed; left:50%; bottom: calc(24px + var(--safe-bottom)); transform:translate(-50%, 20px); background:var(--surface-raised); border:1px solid var(--border); color:var(--text); padding:12px 18px; border-radius:12px; font-size:13px; font-weight:600; opacity:0; transition:.25s; pointer-events:none; z-index:50; max-width:85vw; text-align:center; }
   .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-end; justify-content:center; z-index:80; }
   .modal-overlay.show{ display:flex; }
-  .modal-card{ background:var(--surface); border:1px solid var(--border); border-bottom:none; border-radius:20px 20px 0 0; padding:22px 20px calc(22px + var(--safe-bottom)); width:100%; max-width:480px; max-height:100dvh; overflow-y:auto; animation: slideUp .18s ease; }
+  .modal-card{ background:var(--surface); border:1px solid var(--border); border-bottom:none; border-radius:20px 20px 0 0; padding:22px 20px calc(22px + var(--safe-bottom)); width:100%; max-width:480px; max-height:100vh; max-height:100dvh; overflow-y:auto; animation: slideUp .18s ease; }
   @keyframes slideUp{ from{ transform:translateY(24px); opacity:0; } to{ transform:none; opacity:1; } }
   #toast.show{ opacity:1; transform:translate(-50%,0); }
 
   a{ color:var(--blue); }
   hr{ border:none; border-top:1px solid var(--border); margin:22px 0; }
+  .storage-notice{ position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.7); }
+  .storage-notice[hidden]{ display:none; }
+  .storage-notice-card{ width:100%; max-width:440px; padding:22px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); }
+  .storage-notice-card p{ margin:0 0 18px; line-height:1.5; }
   :focus-visible{ outline:2px solid var(--blue); outline-offset:3px; }
   @media (prefers-reduced-motion: reduce){
     *, *::before, *::after{ animation:none !important; transition:none !important; scroll-behavior:auto !important; }
@@ -237,7 +241,7 @@
 </style>
 </head>
 <body>
-<div id="app">
+<div id="app" inert>
   <header id="topbar"><h1 id="topbarTitle">Racked</h1><div id="topbarActions"></div></header>
   <main id="viewport">
     <section id="view-home" class="view"></section>
@@ -249,6 +253,13 @@
     <section id="view-backup" class="view"></section>
   </main>
 </div>
+<aside id="storageNotice" class="storage-notice" role="status" aria-live="polite">
+  <div class="storage-notice-card">
+    <p id="storageMessage">Opening your saved data…</p>
+    <button type="button" class="btn ghost" id="storageExport">Export This Tab's Data</button>
+    <button type="button" class="btn ghost" id="storageReload" style="margin-top:10px;">Reload Latest Data</button>
+  </div>
+</aside>
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div id="modalOverlay" class="modal-overlay">
   <div class="modal-card" id="modalCard" role="dialog" aria-modal="true" tabindex="-1"></div>
@@ -262,7 +273,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -271,10 +282,19 @@ function defaultState(){
 let persistedStateJSON = JSON.stringify(defaultState());
 let storageRecoveryRaw = null;
 let storageReadFailed = false;
+let observedStorageRaw = null;
+let hasWriteLock = false;
+let storageConflict = false;
+let conflictStateJSON = null;
 function loadState(){
+  // Re-run only before granting edit access, never while a form is editable.
+  persistedStateJSON = JSON.stringify(defaultState());
+  storageRecoveryRaw = null;
+  storageReadFailed = false;
   let raw = null;
   try{
     raw = localStorage.getItem(STORAGE_KEY);
+    observedStorageRaw = raw;
     if(raw===null) return defaultState();
     const loaded = normalizeState(JSON.parse(raw));
     persistedStateJSON = JSON.stringify(loaded);
@@ -289,15 +309,27 @@ function loadState(){
 }
 let state = loadState();
 function saveState({allowRecovery=false}={}){
+  if(!hasWriteLock || storageConflict){
+    state = JSON.parse(persistedStateJSON);
+    alert('This tab cannot save. Use the editing tab, or reload after it closes. This change was not kept.');
+    return false;
+  }
   if((storageRecoveryRaw!==null || storageReadFailed) && !allowRecovery){
     state = JSON.parse(persistedStateJSON);
     alert('Changes were not saved because the original data needs recovery. Export a Full Backup, then restore a valid full backup.');
     return false;
   }
   try{
+    // The lock serializes updated tabs. Detect older clients or storage clears
+    // as well; a check alone would not be an atomic cross-tab lock.
+    if(localStorage.getItem(STORAGE_KEY)!==observedStorageRaw){
+      stopStaleEditor();
+      return false;
+    }
     const json = JSON.stringify(state);
     localStorage.setItem(STORAGE_KEY, json);
     persistedStateJSON = json;
+    observedStorageRaw = json;
     storageRecoveryRaw = null;
     storageReadFailed = false;
     return true;
@@ -357,7 +389,7 @@ function showModal(html){
 function hideModal(){
   const previous = modalReturnFocus;
   document.getElementById('modalOverlay').classList.remove('show');
-  document.getElementById('app').inert = false;
+  document.getElementById('app').inert = !hasWriteLock || storageConflict;
   document.getElementById('modalCard').innerHTML = '';
   if(modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
   modalReturnFocus = null;
@@ -784,12 +816,21 @@ function openEditSetModal(exIdx, setIdx){
 
 function onExerciseAction(act, idx){
   const ex = state.activeSession.exercises[idx];
-  if(act==='wup') ex.weight = Math.round((ex.weight + 0.5)*10)/10;
-  if(act==='wdown') ex.weight = Math.max(0, Math.round((ex.weight - 0.5)*10)/10);
+  if(act==='wup' || act==='wdown'){
+    const next = ex.weight + (act==='wup' ? 0.5 : -0.5);
+    if(!Number.isFinite(next)){ toast('Enter a finite weight'); return; }
+    // Preserve ordinary one-decimal rounding without overflowing large legacy values.
+    const scaled = next * 10;
+    ex.weight = Number.isFinite(scaled) ? Math.round(scaled)/10 : next;
+    if(act==='wdown') ex.weight = Math.max(0, ex.weight);
+  }
   if(act==='rup') ex.reps = ex.reps + 1;
   if(act==='rdown') ex.reps = Math.max(0, ex.reps - 1);
   let message = '';
   if(act==='logset'){
+    if(!Number.isFinite(ex.weight) || !Number.isFinite(ex.reps)){
+      toast('Enter a finite weight and rep count'); return;
+    }
     ex.sets.push({weight: ex.weight, reps: ex.reps, time: new Date().toISOString()});
     message = `Logged ${ex.weight} × ${ex.reps}`;
   }
@@ -996,7 +1037,7 @@ function renderCreate(workoutId){
     if(w){
       editingWorkoutId = w.id;
       keepName = w.name;
-      draftDeck = w.exercises.map(ex=>({ id: ex.id, name: ex.name, weight: ex.weight, reps: ex.reps, notes: ex.notes }));
+      draftDeck = w.exercises.map(ex=>({...ex}));
       paintCreate();
       return;
     }
@@ -1084,7 +1125,7 @@ function paintCreate(){
     const name = document.getElementById('cw-name').value.trim();
     if(!name){ toast('Name your workout first'); return; }
     if(draftDeck.length===0){ toast('Add at least one exercise'); return; }
-    const exercises = draftDeck.map(x=>({id:x.id||uid(), name:x.name, weight:x.weight, reps:x.reps, notes:x.notes || ''}));
+    const exercises = draftDeck.map(x=>({...x, id:x.id||uid(), notes:x.notes || ''}));
     if(editingWorkoutId){
       const w = state.workouts.find(x=>x.id===editingWorkoutId);
       if(w){ w.name = name; w.exercises = exercises; }
@@ -1735,15 +1776,130 @@ function fallbackCopy(text){
   const ta = document.createElement('textarea');
   ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
   document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); toast('Summary copied'); }catch(e){ alert(text); }
+  try{
+    if(document.execCommand('copy')) toast('Summary copied');
+    else alert(text);
+  }catch(e){ alert(text); }
   document.body.removeChild(ta);
 }
+
+/* =========================================================
+   CROSS-TAB EDIT ACCESS
+   ========================================================= */
+let lockRequestPending = false;
+let releaseWriteLock = null;
+let lockAbort = null;
+let pageActive = true;
+let lockingUnavailable = false;
+let everHadWriteAccess = false;
+
+function updateStorageAccess(){
+  const editable = hasWriteLock && !storageConflict;
+  document.getElementById('app').inert = !editable || document.getElementById('modalOverlay').classList.contains('show');
+  document.getElementById('modalOverlay').inert = !editable;
+  document.getElementById('storageNotice').hidden = editable;
+  document.getElementById('storageMessage').textContent = storageConflict
+    ? 'Saved data changed outside this editor. Saving is paused to protect it. Export this tab’s data and form drafts before reloading. Saved data from the other tab will be kept.'
+    : lockingUnavailable
+      ? 'Safe editing is unavailable in this browser. Use a current browser over HTTPS or localhost. Your saved data can still be exported.'
+      : 'Another Racked tab may be editing. Close it to continue here. This tab will load the latest saved data before editing; you can export this tab’s snapshot while waiting.';
+}
+function stopStaleEditor(){
+  const snapshot = {...state};
+  const draft = {view:currentView, fields:[...document.querySelectorAll('.view.active input:not([type="file"]), .view.active textarea, #modalCard input, #modalCard textarea')]
+    .map(el=>({id:el.id, role:el.dataset.role, index:el.dataset.idx, part:el.dataset.part, value:el.value}))};
+  if(currentView==='create'){ draft.workoutName = keepName; draft.exercises = draftDeck; }
+  if(currentView==='measure'){ draft.date = measureDate; draft.measurements = measureDraft; draft.customParts = customParts; }
+  // Keep a normal v1 full backup and attach otherwise unsaved form values for
+  // manual recovery. Never replace pre-existing imported metadata with ours.
+  let draftKey = 'rackedRecoveryDraft';
+  while(Object.prototype.hasOwnProperty.call(snapshot, draftKey)) draftKey += '_';
+  snapshot[draftKey] = draft;
+  conflictStateJSON = JSON.stringify(snapshot);
+  state = JSON.parse(persistedStateJSON);
+  storageConflict = true;
+  hasWriteLock = false;
+  if(releaseWriteLock) releaseWriteLock();
+  updateStorageAccess();
+}
+function requestWriteAccess(){
+  if(lockRequestPending || storageConflict || lockingUnavailable || !pageActive) return;
+  if(!navigator.locks || !navigator.locks.request){
+    lockingUnavailable = true;
+    updateStorageAccess();
+    return;
+  }
+  lockRequestPending = true;
+  lockAbort = new AbortController();
+  // A document-lifetime lock keeps existing synchronous mutations atomic without
+  // leases, polling, or changing the v1 localStorage record. Closing/navigation
+  // releases ownership; a waiting tab reloads storage before its UI is enabled.
+  navigator.locks.request(STORAGE_KEY, {mode:'exclusive', signal:lockAbort.signal}, async ()=>{
+    if(!pageActive) return;
+    let changed = false;
+    try { changed = localStorage.getItem(STORAGE_KEY)!==observedStorageRaw; }
+    catch (_) { if(!storageReadFailed) state = loadState(); }
+    if(changed && everHadWriteAccess){
+      stopStaleEditor();
+      return;
+    }
+    if(changed) state = loadState();
+    if(!everHadWriteAccess){
+      currentView = 'home'; currentParams = {};
+      history.replaceState({view:'home',params:{}}, '', '#home');
+      render();
+    }
+    // Same-snapshot BFCache restores keep form drafts, focus and open editors.
+    hasWriteLock = true;
+    everHadWriteAccess = true;
+    updateStorageAccess();
+    await new Promise(resolve=>{ releaseWriteLock = resolve; });
+    releaseWriteLock = null;
+    hasWriteLock = false;
+  }).catch(error=>{
+    if(error.name!=='AbortError') lockingUnavailable = true;
+  }).finally(()=>{
+    lockRequestPending = false;
+    updateStorageAccess();
+    // A BFCache restore can precede completion of the old request's release.
+    if(pageActive && !storageConflict && !lockingUnavailable) requestWriteAccess();
+  });
+}
+window.addEventListener('pagehide', ()=>{
+  pageActive = false;
+  hasWriteLock = false;
+  if(lockAbort) lockAbort.abort();
+  if(releaseWriteLock) releaseWriteLock();
+  updateStorageAccess();
+});
+window.addEventListener('pageshow', ()=>{
+  pageActive = true;
+  requestWriteAccess();
+});
+window.addEventListener('storage', event=>{
+  if(hasWriteLock && (event.key===STORAGE_KEY || event.key===null)){
+    // Compare the current bytes, not possibly delayed event.newValue.
+    try { if(event.storageArea===localStorage && localStorage.getItem(STORAGE_KEY)!==observedStorageRaw) stopStaleEditor(); }
+    catch (_) { stopStaleEditor(); }
+  }
+});
+document.getElementById('storageExport').onclick = ()=>{
+  if(conflictStateJSON!==null){
+    downloadJSONText(`racked-conflict-${todayISODate()}.json`, conflictStateJSON);
+    toast('This tab’s data exported');
+  } else exportFullBackup();
+};
+document.getElementById('storageReload').onclick = ()=>{
+  if(confirm('Reload the latest saved data? Unsaved form fields will be discarded. Export this tab’s data first if you need a copy.')) location.reload();
+};
 
 /* =========================================================
    INIT
    ========================================================= */
 history.replaceState({view:'home', params:{}}, '', '#home');
 render();
+updateStorageAccess();
+requestWriteAccess();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
