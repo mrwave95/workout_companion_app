@@ -58,3 +58,8 @@ The highest-value follow-up is concurrent-tab conflict protection: whole-state l
 For large histories, measure the cost of whole-state synchronous localStorage writes (especially notes) and chart rendering before considering batched writes, IndexedDB, chart downsampling, or module extraction. Such changes affect durability and should have realistic volume benchmarks. Charts still lack a full accessible data-table alternative, and the segmented progression selector could gain richer selected-state semantics. Test iOS/Safari offline updates, installation, and assistive technology on real devices.
 
 The critical audited faults are fixed and covered by automated regressions. The app remains intentionally small and deployable as static files. Its principal unresolved reliability limitation is concurrent editing across tabs; its main verification gap is non-Chromium device coverage.
+
+
+## Follow-up production review
+
+The subsequent review of these three commits addresses concurrent-tab editing, metadata loss on workout edits, non-finite stepper results, and clipboard false-success handling. See [production-readiness.md](production-readiness.md) for the updated concurrency contract, 55-test result, actual versus static Safari evidence, rollout restrictions, and release assessment. The 38-test results and remaining opportunities above describe the original optimization pass, not the final release status.
