@@ -1,38 +1,17 @@
-const {test,before,after} = require('node:test');
+const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
 const fs = require('node:fs');
-const path = require('node:path');
-const playwright = require('playwright');
+const {browserSuite} = require('./browser-helper.cjs');
 
-// Run against another installed engine with RACKED_TEST_BROWSER=webkit.
-// WebKit on Linux supplements compatibility checks; it is not iOS Safari.
+// Linux WebKit supplements compatibility checks; it is not iOS Safari.
 const engine = process.env.RACKED_TEST_BROWSER || 'chromium';
-let browser,server,origin;
-before(async()=>{
-  const root=path.resolve(__dirname,'..');
-  const files=new Set(['index.html','sw.js','manifest.json','icon-192.png','icon-512.png']);
-  server=http.createServer((req,res)=>{
-    const name=new URL(req.url,'http://localhost').pathname.slice(1)||'index.html';
-    if(!files.has(name)){res.writeHead(404).end();return;}
-    res.setHeader('Content-Type',name.endsWith('.html')?'text/html':name.endsWith('.js')?'application/javascript':name.endsWith('.json')?'application/json':'image/png');
-    res.end(fs.readFileSync(path.join(root,name)));
-  });
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  origin=`http://127.0.0.1:${server.address().port}`;
-  const executablePath=engine==='chromium' ? process.env.CHROMIUM_PATH || (fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined) : undefined;
-  browser=await playwright[engine].launch({executablePath,args:engine==='chromium'?['--no-sandbox']:[]});
-});
-after(async()=>{await browser?.close();if(server)await new Promise(resolve=>server.close(resolve));});
+const app = browserSuite({engine});
 async function open(t,{init,serviceWorkers='block'}={}){
-  const context=await browser.newContext({viewport:{width:390,height:844},serviceWorkers});
-  t.after(()=>context.close());
+  const context=await app.context(t,{viewport:{width:390,height:844},serviceWorkers});
   if(init)await context.addInitScript(init);
   const page=await context.newPage();
-  const errors=[];page.on('pageerror',error=>errors.push(error.message));
   const alerts=[];page.on('dialog',dialog=>{alerts.push(dialog.message());return dialog.dismiss();});
-  t.after(()=>assert.deepEqual(errors,[]));
-  await page.goto(origin);
+  await page.goto(app.origin);
   return {page,context,alerts};
 }
 
@@ -96,7 +75,7 @@ test(`${engine}: standalone static workflow preserves notes, downloads data, and
   await page.reload();
   await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
   await context.setOffline(true);
-  await page.goto(origin+'/?standalone=1');
+  await page.goto(app.origin+'/?standalone=1');
   await page.locator('#t-workouts').click();
   await page.locator('.workout-start').click();
   assert.equal(await page.locator('[data-role="notes"]').inputValue(),'Controlled tempo');

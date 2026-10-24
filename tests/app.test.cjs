@@ -1,59 +1,34 @@
-const {test, before, after} = require('node:test');
+const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
-const {readFile, access} = require('node:fs/promises');
+const {readFile} = require('node:fs/promises');
 const {join} = require('node:path');
-const {chromium} = require('playwright');
+const {browserSuite,seedState} = require('./browser-helper.cjs');
 
-const root = join(__dirname, '..');
-const files = new Set(['index.html','manifest.json','sw.js','icon-192.png','icon-512.png']);
-let server, browser, origin;
 let shellFailure = false;
 let legacyWorker = false;
-before(async()=>{
-  server = http.createServer(async(req,res)=>{
-    const name = new URL(req.url,'http://localhost').pathname.slice(1) || 'index.html';
-    if(!files.has(name)){res.writeHead(404).end(); return;}
-    if(shellFailure && name==='index.html'){res.writeHead(503).end('Unavailable'); return;}
-    try {
-      res.setHeader('Cache-Control','no-store');
-      if(name==='sw.js' && legacyWorker){res.setHeader('Content-Type','application/javascript'); res.end(await readFile(join(__dirname,'fixtures/sw-v4.js'))); return;}
-      res.setHeader('Content-Type',name.endsWith('.js')?'application/javascript':name.endsWith('.json')?'application/json':name.endsWith('.png')?'image/png':'text/html');
-      res.end(await readFile(join(root,name)));
-    } catch { res.writeHead(500).end(); }
-  });
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  origin = `http://127.0.0.1:${server.address().port}`;
-  let executablePath = process.env.CHROMIUM_PATH;
-  if(!executablePath){try{await access('/usr/bin/chromium'); executablePath='/usr/bin/chromium';}catch{}}
-  browser = await chromium.launch({executablePath,headless:true,args:['--no-sandbox']});
-});
-after(async()=>{await browser?.close(); await new Promise(resolve=>server?.close(resolve));});
+const app = browserSuite({respond:async(name,req,res)=>{
+  if(shellFailure && name==='index.html'){res.writeHead(503).end('Unavailable');return true;}
+  if(name==='sw.js' && legacyWorker){
+    res.setHeader('Content-Type','application/javascript');
+    res.end(await readFile(join(__dirname,'fixtures/sw-v4.js')));return true;
+  }
+}});
 const blank = ()=>({version:1,workouts:[],sessions:[],measurements:[],activeSession:null});
 function workout(id='w',name='Strength'){
   return {id,name,exercises:[{id:'e',name:'Squat',weight:40,reps:8,notes:'Keep this cue'}]};
 }
 async function open(t, state=blank(), options={}){
-  const context = await browser.newContext({serviceWorkers:'block',...options});
-  t.after(()=>context.close());
-  await context.addInitScript(raw=>{
-    if(!sessionStorage.getItem('seeded')){
-      localStorage.setItem('racked_state_v1',raw);
-      sessionStorage.setItem('seeded','1');
-    }
-  }, typeof state==='string'?state:JSON.stringify(state));
+  const context = await app.context(t,options);
+  await seedState(context,state);
   const page = await context.newPage();
-  const errors=[];
-  page.on('pageerror',error=>errors.push(error.message));
   page.on('dialog',dialog=>dialog.type()==='confirm'?dialog.accept():dialog.dismiss());
-  t.after(()=>assert.deepEqual(errors,[], 'No uncaught application errors'));
-  await page.goto(origin);
+  await page.goto(app.origin);
   return page;
 }
 async function saved(page){return page.evaluate(()=>JSON.parse(localStorage.getItem('racked_state_v1')));}
 async function importFile(page,id,value){
   await page.locator(id).setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(value))});
-  // FileReader, replacement confirmation and persistence happen asynchronously.
+  // File reading, replacement confirmation and persistence happen asynchronously.
   // A reload must not abort the import while the input still holds the file.
   await page.waitForFunction(selector=>{
     const input=document.querySelector(selector);
@@ -221,9 +196,9 @@ test('invalid stored data is preserved, exported byte-for-byte and recoverable',
 });
 
 test('browser PWA install, HTTP-error fallback and offline query navigation',async t=>{
-  const context=await browser.newContext(); t.after(()=>context.close());
+  const context=await app.context(t,{serviceWorkers:'allow'});
   const page=await context.newPage();
-  await page.goto(origin);
+  await page.goto(app.origin);
   await page.evaluate(()=>caches.open('unrelated-app-cache').then(cache=>cache.put('/other',new Response('keep'))));
   await page.evaluate(()=>navigator.serviceWorker.ready);
   await page.reload();
@@ -231,11 +206,11 @@ test('browser PWA install, HTTP-error fallback and offline query navigation',asy
   assert((await page.evaluate(()=>caches.keys())).includes('unrelated-app-cache'));
   shellFailure=true;
   try{
-    await page.goto(origin+'/index.html?server-error=1');
+    await page.goto(app.origin+'/index.html?server-error=1');
     assert.equal(await page.title(),'Racked');
   } finally {shellFailure=false;}
   await context.setOffline(true);
-  await page.goto(origin+'/?from=installed');
+  await page.goto(app.origin+'/?from=installed');
   assert.equal(await page.title(),'Racked');
   await page.locator('#t-create').click();
   assert.equal(await page.locator('#cw-name').count(),1);
@@ -308,11 +283,11 @@ test('deleting the final set of a finished exercise restores its original defaul
 });
 
 test('an installed v4 worker upgrades without deleting sibling caches or breaking offline launch',async t=>{
-  const context=await browser.newContext(); t.after(()=>context.close());
+  const context=await app.context(t,{serviceWorkers:'allow'});
   const page=await context.newPage();
   legacyWorker=true;
   try {
-    await page.goto(origin);
+    await page.goto(app.origin);
     await page.evaluate(()=>navigator.serviceWorker.ready);
     await page.reload();
     await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
@@ -326,7 +301,7 @@ test('an installed v4 worker upgrades without deleting sibling caches or breakin
   const keys=await page.evaluate(()=>caches.keys());
   assert(keys.some(key=>key.startsWith('racked:') && key.endsWith(':v5')));
   await context.setOffline(true);
-  await page.goto(origin+'/?upgraded=1');
+  await page.goto(app.origin+'/?upgraded=1');
   assert.equal(await page.title(),'Racked');
 });
 

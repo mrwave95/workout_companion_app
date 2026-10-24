@@ -1,65 +1,52 @@
-# Technical review and implemented improvements
+# Engineering review
 
-## Scope and baseline
+Comparison base: original static app at `07da71d`. The optimization history and earlier reports remain in Git; this document consolidates their current findings and release conditions.
 
-Reviewed every application file at baseline commit `07da71d`: the single-page HTML/CSS/JavaScript application, manifest, service worker, and two icons. No project README, package manager configuration, CI, or existing test suite was present. The baseline Chromium smoke check passed workout creation, localStorage persistence, worker control, asset serving and basic offline reload. More targeted audit probes reproduced the defects below.
+## Architecture and cost
 
-The application is a local-only static PWA. Views share one version-1 state object; localStorage is the durable store, JSON files provide portability, and canvas charts visualize session/measurement history. There are no network APIs, authentication flows, credentials, production dependencies, or compilation requirements. The manifest and small icons did not warrant replacement. This pass preserves the visual design, features, static hosting, and storage key/schema.
+`index.html` still contains all UI, styles, state, validation and canvas charts. `sw.js` handles offline assets. The manifest and two small icons are unchanged. There are no runtime packages, external APIs, modules, framework, bundler, database migration or added network requests.
 
-## Priorities and outcomes
+| Measure | Original | Before size review | After simplification |
+| --- | ---: | ---: | ---: |
+| HTML + worker source lines | 1,627 | 1,979 | 1,963 |
+| HTML + worker bytes | 73,466 | 93,099 | 92,451 |
+| HTML + worker gzip bytes | 18,368 | 24,246 | 24,040 |
+| All five production assets, bytes | 77,509 | 97,142 | 96,494 |
 
-These are confirmed defects, ranked by impact and implementation risk; no general rewrite was needed.
+Gzip figures compress each source file separately with a fixed timestamp; actual hosting compression may differ. The app grew to protect data and offline operation. No overall startup speedup or bundle-size reduction is claimed. Repeated history sorting was reduced from once per exercise to once per session render, and suggestions reuse one name list per create/edit visit.
 
-| Priority | Confirmed problem | Implemented result | Regression risk / complexity |
-| --- | --- | --- | --- |
-| 1 | Imported IDs entered HTML attributes without escaping | Escape every workout ID used in markup; imported values remain inert | Low / small |
-| 1 | Full restore discarded active weight/reps and starting defaults | Preserve/derive resumable fields and retain unknown metadata | Medium / bounded validation |
-| 1 | Malformed records, non-text names, non-finite numbers and invalid dates broke rendering | Shared validated, atomic category/full imports; require complete full backups | Medium / compatibility tests |
-| 1 | Failed saves continued as successes; corrupt saved data could later be overwritten | Return success/failure, roll back memory, protect original bytes, support recovery export; retry editors resolve current records | Medium / storage fault tests |
-| 1 | Worker activation deleted unrelated caches; HTTP errors poisoned the offline shell | Scope cache ownership; cache only complete successful asset responses; track cache writes with worker lifetime | Medium / worker lifecycle tests |
-| 2 | Offline launches with query strings missed the cache; hanging network blocked usable content | Canonicalize shell URLs and bound cached fallback to three seconds | Low / worker and browser tests |
-| 2 | Names such as `constructor` and `__proto__` crashed grouping/summary/form code | Use dictionaries without inherited properties | Low / browser tests |
-| 2 | Editing a workout erased exercise notes; deleting the final finished set retained deleted defaults | Preserve notes; restore original starting defaults when no sets remain | Low / workflow tests |
-| 2 | Calendar dates appeared one day early west of UTC | Interpret date-only measurements as local calendar dates | Low / time-zone browser test |
-| 2 | Workout start was not keyboard-accessible; modals lacked focus handling | Native start buttons, dialog semantics, Tab trap, Escape, focus restoration, associated labels | Medium / keyboard browser tests |
-| 2 | Session rotation left old slide dimensions; inactive slides stayed focusable | Observe viewport sizing, preserve slide selection, mark inactive slides inert, dispose observers/listeners | Medium / rotation and keyboard tests |
-| 3 | Repeated history sorting/scanning during rendering and exercise-name typing | Sort history once per session render; compute name suggestions once per create/edit visit | Low / behavior coverage |
+## Safeguards retained
 
-Additional accessibility changes allow browser zoom, provide visible focus, announce toast messages, honor reduced motion, and keep modals scrollable in landscape. Session actions restore keyboard focus after rerendering. Input validation rejects invalid/negative new values and fractional reps, including inline edits; failed writes reset inline controls to the durable values.
+| Area | Verified problem addressed and resulting behavior |
+| --- | --- |
+| Import security and validation | Escape imported IDs in markup; validate records, dates, finite numbers and versions before confirmation. Full backups require all three collections; category imports replace only their category. |
+| Persistence and recovery | Preserve active-session controls, notes and unknown metadata. Failed writes roll memory back, reset controls and cannot report success; retries resolve current records. Corrupt saved bytes remain exportable and protected from accidental replacement. |
+| Multiple tabs | An exclusive browser Web Lock permits one editor per shared storage context. Waiting tabs can export snapshots, then load current data on ownership transfer. Raw-byte checks and storage events freeze stale editors; full restores cannot bypass ownership checks. |
+| Draft protection | Unchanged-snapshot lifecycle restores retain forms. Conflict exports attach `rackedRecoveryDraft` metadata, with a collision-safe name, for manual recovery of unsaved fields. Importing a backup does not automatically apply those drafts. |
+| Offline assets | Cache only four complete successful app responses under a scope-owned name. Track writes through worker lifetime; preserve other apps' caches. Root/index launches and query variants share one shell. Network-first uses cached fallback on errors/offline or after a three-second stall, with late refresh allowed. |
+| Usability | Keyboard workout activation, modal focus/escape/trapping, associated labels, zoom, inactive-slide isolation and responsive carousel sizing preserve existing design and workflows. Date-only measurements use local calendar dates. Clipboard failure reports manual copying; numeric edits cannot persist overflow as null. |
 
-Import/export handlers share category validation and JSON-download helpers rather than copying replacement logic. Test dependencies are development-only and do not load in the PWA.
+The raw observed storage bytes and the normalized rollback snapshot serve different purposes; merging them would weaken conflict detection or recovery. Explicit lock lifecycle handling prevents stale writes after navigation or suspension. Legacy cache names are deliberately retained because their ownership cannot be proven. These are safety costs, not speculative abstractions.
 
-## Verification
+## Simplification pass
 
-Current-instance validation on Linux with Node.js 24.19.0, Python 3.12.14, Playwright 1.62.1 and system Chromium:
+- Replaced five browser-server/launch/cleanup implementations with one test-only helper. Scenario fixtures and assertions remain local; no page-object framework was added.
+- Kept all 55 test cases: data unit and browser tests exercise different boundaries; the legacy worker fixture is required to verify upgrades; compatibility scenarios run in a second engine in CI.
+- Removed unused carousel APIs and the controller for listeners on disposable DOM nodes. ResizeObserver disconnection remains necessary and is retained.
+- Replaced manual FileReader/Promise plumbing with native `file.text()`, supported within the documented browser baseline. Removed a never-used array fallback parameter.
+- Removed duplicate lock-request state: the existing controller already tracks the pending/held request lifetime. One entry guard controls reacquisition.
+- Consolidated overlapping technical/release reports here, shortened the README, and made CI share installation/setup in one job. The generated dependency lockfile remains intact.
 
-- Baseline functional smoke check: passed before edits.
-- Frozen dependency installation with `npm ci`: passed (cloud npm cache redirected to `/tmp`).
-- `npm test`: 38 tests passed, 0 failed, 0 skipped.
-  - 7 data unit tests: old/current backups, active-session controls, invalid shapes/values/dates, atomic replacement, metadata retention, quota rollback and raw-data protection.
-  - 11 worker unit tests: atomic installation/failure, scoped cache cleanup, network freshness, error/redirect/partial protection, query fallback, timed fallback with late refresh, request limits and cache failures.
-  - 16 application browser tests: create/log/edit/delete/finish/reopen, defaults, persistent state, notes, full restore, injection resistance, special names, time-zone dates, quota/recovery/retry handling, exports, repeated keyboard actions, real offline operation and an installed v4→v5 worker upgrade.
-  - 4 UI browser tests: native keyboard start, offscreen controls, rotation, modal keyboard/focus behavior, labels and zoom.
-- `git diff --check`: passed.
-- Production build: not applicable; production remains static files with no bundler or runtime packages.
+## Verification and release limits
 
-The added GitHub Actions workflow has not been run remotely in this task. Browser checks used Chromium; Safari/iOS installation, screen-reader behavior and other browser engines still need device testing. No deployment, merge, or live-infrastructure change was made.
+The original app had no tests or build. All **55 regression tests pass** after simplification, with no failures/skips; JavaScript/manifest parsing and whitespace checks pass. `npm ls --omit=dev --all` reports an empty production dependency tree. Browser contexts capture uncaught errors, including pages created during multi-tab tests. Seed fixtures skip opaque about:blank origins; import tests wait for asynchronous completion before reloading.
 
-## Performance evidence and limits
+Actual browser evidence is **Linux Chromium** through Playwright 1.62.1. Multi-tab checks use independent pages, real Web Locks and localStorage; pagehide/pageshow coverage uses synthetic lifecycle events, not proof of real-device BFCache behavior. CI's WebKit checks have not run remotely in this task.
 
-The worker's active cache is bounded to four canonical URLs instead of caching arbitrary GETs and query variants. The unit test checks a simulated stalled network returns the cached shell after the configured 3,000 ms deadline while a later response refreshes it. This is a latency bound, not a measured real-network speedup.
+WebKit installation was attempted with TLS verification intact, but the environment proxy denied `cdn.playwright.dev` and `playwright.download.prss.microsoft.com` with HTTP 403. No Safari/WebKit tests ran here. Static analysis supports Safari/iOS 15.5+ (`inert` and Web Locks baseline); the main viewport and modal retain vh/dvh fallbacks, safe-area padding and install metadata.
 
-For a session with E exercises, history sorting decreases from E sorts per render to one. Suggestions previously scanned/sorted history on every nonempty keystroke; they now reuse one name list for the create/edit visit. These remove repeated work without changing ranking or suggestions. No percentage speedup, startup improvement or bundle-size reduction is claimed; runtime source grew to add safeguards. There was no evidence supporting a framework, bundler, asset rewrite or storage migration.
+**Release assessment:** tested Chromium workflows are suitable for release review; broad Safari/iOS sign-off remains conditional on real-device checks. Before rollout, refresh/close older tabs: old JavaScript cannot be retroactively forced to honor the lock. Unsupported locking fails closed with export available. A background editing tab retains ownership until it closes/navigates; there is no unsafe forced takeover or automatic merge.
 
-## Remaining opportunities and assessment
+On supported iPhone/iPad Safari and a Home Screen installation, verify installation/icons/scope, saved sets/notes after restart, multiple-tab ownership transfer, background/back-navigation behavior, update then offline relaunch, JSON import/export through Files, cancel/recovery/quota paths, virtual-keyboard/rotation/zoom/VoiceOver, and data expectations between separate storage contexts. Neither localStorage nor CacheStorage is a permanent backup.
 
-The highest-value follow-up is concurrent-tab conflict protection: whole-state localStorage writes still use last-writer-wins behavior. A storage-event/version conflict design should preserve unsaved work and be tested before adding synchronization. Also consider duplicate-ID import diagnostics; preserving existing IDs avoids destructive rewriting, but duplicates can make record targeting ambiguous.
-
-For large histories, measure the cost of whole-state synchronous localStorage writes (especially notes) and chart rendering before considering batched writes, IndexedDB, chart downsampling, or module extraction. Such changes affect durability and should have realistic volume benchmarks. Charts still lack a full accessible data-table alternative, and the segmented progression selector could gain richer selected-state semantics. Test iOS/Safari offline updates, installation, and assistive technology on real devices.
-
-The critical audited faults are fixed and covered by automated regressions. The app remains intentionally small and deployable as static files. Its principal unresolved reliability limitation is concurrent editing across tabs; its main verification gap is non-Chromium device coverage.
-
-
-## Follow-up production review
-
-The subsequent review of these three commits addresses concurrent-tab editing, metadata loss on workout edits, non-finite stepper results, and clipboard false-success handling. See [production-readiness.md](production-readiness.md) for the updated concurrency contract, 55-test result, actual versus static Safari evidence, rollout restrictions, and release assessment. The 38-test results and remaining opportunities above describe the original optimization pass, not the final release status.
+Remaining opportunities are duplicate-ID diagnostics, accessible chart tables and measured large-history storage/rendering work. They do not justify a framework, storage migration or speculative optimization now. No PR, merge, deployment or live-infrastructure change was made during this size review.

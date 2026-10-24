@@ -1,40 +1,19 @@
-const {test:runTest,before,after} = require('node:test');
+const {test:runTest} = require('node:test');
 const test=(name,fn)=>runTest(name,{timeout:30000},fn);
 const assert = require('node:assert/strict');
-const http = require('node:http');
-const {readFile,access} = require('node:fs/promises');
-const {join} = require('node:path');
-const playwright = require('playwright');
+const {readFile} = require('node:fs/promises');
+const {browserSuite} = require('./browser-helper.cjs');
 const engine = process.env.RACKED_TEST_BROWSER || 'chromium';
-let server,browser,origin;
+const app = browserSuite({engine,respond:(name,req,res)=>{
+  if(name==='away'){res.setHeader('Content-Type','text/html');res.end('<title>Away</title>');return true;}
+}});
 const blank=()=>({version:1,workouts:[],sessions:[],measurements:[],activeSession:null});
 const workout={id:'w',name:'Strength',exercises:[{id:'e',name:'Squat',weight:40,reps:8,notes:''}]};
-before(async()=>{
-  server=http.createServer(async(req,res)=>{
-    const path=new URL(req.url,'http://local').pathname;
-    if(path==='/away'){res.end('<title>Away</title>');return;}
-    res.setHeader('Content-Type','text/html');res.end(await readFile(join(__dirname,'../index.html')));
-  });
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  origin=`http://127.0.0.1:${server.address().port}`;
-  let executablePath;
-  if(engine==='chromium'){
-    executablePath=process.env.CHROMIUM_PATH;
-    if(!executablePath){try{await access('/usr/bin/chromium');executablePath='/usr/bin/chromium';}catch{}}
-  }
-  browser=await playwright[engine].launch({executablePath,args:engine==='chromium'?['--no-sandbox']:[]});
-});
-after(async()=>{await browser?.close();await new Promise(resolve=>server.close(resolve));});
-async function context(t){
-  const c=await browser.newContext({serviceWorkers:'block'}),errors=[];
-  c.on('page',p=>p.on('pageerror',error=>errors.push(error.message)));
-  t.after(async()=>{await c.close();assert.deepEqual(errors,[], 'No uncaught errors in either tab');});
-  return c;
-}
+const context=t=>app.context(t);
 async function page(c){
   const p=await c.newPage();p.setDefaultTimeout(10000);
   p.on('dialog',d=>d.type()==='confirm'?d.accept():d.dismiss());
-  await p.goto(origin);return p;
+  await p.goto(app.origin);return p;
 }
 async function editable(p){await p.waitForFunction(()=>!document.getElementById('app').inert);}
 async function stored(p){return p.evaluate(()=>JSON.parse(localStorage.getItem('racked_state_v1')));}
@@ -66,6 +45,11 @@ test('a second tab cannot mutate; closing editor transfers latest session and no
 test('simultaneously opening tabs grants exactly one editor',async t=>{
   const c=await context(t);
   const tabs=await Promise.all([page(c),page(c),page(c)]);
+  await tabs[0].waitForFunction(async()=>{
+    const state=await navigator.locks.query();
+    return state.held.filter(lock=>lock.name==='racked_state_v1').length===1
+      && state.pending.filter(lock=>lock.name==='racked_state_v1').length===2;
+  });
   const lockState=await tabs[0].evaluate(()=>navigator.locks.query());
   assert.equal(lockState.held.filter(lock=>lock.name==='racked_state_v1').length,1);
   assert.equal(lockState.pending.filter(lock=>lock.name==='racked_state_v1').length,2);
@@ -131,7 +115,7 @@ test('without Web Locks the app fails safely and still exports original data',as
 
 test('pending lock navigation cancels cleanly and lifecycle restores preserve drafts',async t=>{
   const c=await context(t),first=await page(c);await editable(first);
-  const waiting=await page(c);await waiting.goto(origin+'/away');
+  const waiting=await page(c);await waiting.goto(app.origin+'/away');
   await first.locator('#t-create').click();await first.locator('#cw-name').fill('Draft retained');
   await first.evaluate(()=>{
     window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));

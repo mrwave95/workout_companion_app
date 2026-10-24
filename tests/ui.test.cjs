@@ -1,30 +1,7 @@
-const { test, before, after } = require('node:test');
+const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
-const fs = require('node:fs');
-const path = require('node:path');
-const { chromium } = require('playwright');
-
-let browser, server, baseURL;
-const root = path.resolve(__dirname, '..');
-before(async () => {
-  server = http.createServer((req, res) => {
-    const name = new URL(req.url, 'http://localhost').pathname.slice(1) || 'index.html';
-    if (!['index.html', 'sw.js', 'manifest.json', 'icon-192.png', 'icon-512.png'].includes(name)) {
-      res.writeHead(404).end(); return;
-    }
-    res.setHeader('Content-Type', name.endsWith('.html') ? 'text/html' : name.endsWith('.js') ? 'application/javascript' : name.endsWith('.json') ? 'application/json' : 'image/png');
-    res.end(fs.readFileSync(path.join(root, name)));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  baseURL = `http://127.0.0.1:${server.address().port}`;
-  const executablePath = process.env.CHROMIUM_PATH || (fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
-  browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-});
-after(async () => {
-  if (browser) await browser.close();
-  if (server) await new Promise(resolve => server.close(resolve));
-});
+const {browserSuite} = require('./browser-helper.cjs');
+const app = browserSuite();
 
 const workout = {
   id: 'workout-1', name: 'Lower body', exercises: [
@@ -32,24 +9,19 @@ const workout = {
     { id: 'curl', name: 'Curl', weight: 5, reps: 10, notes: '' }
   ]
 };
-async function withPage(run, { active = false } = {}) {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
-  try {
-    const page = await context.newPage();
-    const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
-    await page.goto(baseURL);
-    const state = { version: 1, workouts: [workout], sessions: [], measurements: [], activeSession: null };
-    if (active) state.activeSession = {
-      id: 'session-1', workoutId: workout.id, workoutName: workout.name, date: '2026-10-24T12:00:00.000Z',
-      exercises: workout.exercises.map(ex => ({ ...ex, exerciseId: ex.id, startWeight: ex.weight, startReps: ex.reps,
-        finished: false, sets: [{ weight: ex.weight, reps: ex.reps, time: '2026-10-24T12:00:00.000Z' }] }))
-    };
-    await page.evaluate(state => localStorage.setItem('racked_state_v1', JSON.stringify(state)), state);
-    await page.reload();
-    await run(page);
-    assert.deepEqual(errors, []);
-  } finally { await context.close(); }
+async function withPage(t,run, { active = false } = {}) {
+  const context = await app.context(t,{viewport:{width:390,height:844}});
+  const page = await context.newPage();
+  await page.goto(app.origin);
+  const state = { version: 1, workouts: [workout], sessions: [], measurements: [], activeSession: null };
+  if (active) state.activeSession = {
+    id: 'session-1', workoutId: workout.id, workoutName: workout.name, date: '2026-10-24T12:00:00.000Z',
+    exercises: workout.exercises.map(ex => ({ ...ex, exerciseId: ex.id, startWeight: ex.weight, startReps: ex.reps,
+      finished: false, sets: [{ weight: ex.weight, reps: ex.reps, time: '2026-10-24T12:00:00.000Z' }] }))
+  };
+  await page.evaluate(state => localStorage.setItem('racked_state_v1', JSON.stringify(state)), state);
+  await page.reload();
+  await run(page);
 }
 async function start(page) {
   await page.locator('#t-workouts').click();
@@ -59,8 +31,8 @@ async function start(page) {
   await page.locator('#sessCounter').waitFor();
 }
 
-test('keyboard users can start workouts and offscreen exercises stay out of the tab order', async () => {
-  await withPage(async page => {
+test('keyboard users can start workouts and offscreen exercises stay out of the tab order', async t => {
+  await withPage(t,async page => {
     await start(page);
     assert.equal(await page.locator('#sessCounter').textContent(), 'Exercise 1 of 2');
     assert.equal(await page.getByRole('spinbutton', { name: 'Weight (kg)', exact: true }).count(), 1);
@@ -74,8 +46,8 @@ test('keyboard users can start workouts and offscreen exercises stay out of the 
   });
 });
 
-test('session carousel relayout preserves the active exercise after viewport rotation', async () => {
-  await withPage(async page => {
+test('session carousel relayout preserves the active exercise after viewport rotation', async t => {
+  await withPage(t,async page => {
     await start(page);
     await page.locator('#sessNext').click();
     await page.setViewportSize({ width: 844, height: 390 });
@@ -89,8 +61,8 @@ test('session carousel relayout preserves the active exercise after viewport rot
   });
 });
 
-test('set editor traps keyboard focus, supports Escape, and restores focus after save', async () => {
-  await withPage(async page => {
+test('set editor traps keyboard focus, supports Escape, and restores focus after save', async t => {
+  await withPage(t,async page => {
     await start(page);
     const chip = page.locator('.set-chip').first();
     await chip.click();
@@ -113,8 +85,8 @@ test('set editor traps keyboard focus, supports Escape, and restores focus after
   }, { active: true });
 });
 
-test('workout and measurement fields have associated labels and zoom remains available', async () => {
-  await withPage(async page => {
+test('workout and measurement fields have associated labels and zoom remains available', async t => {
+  await withPage(t,async page => {
     assert(!await page.locator('meta[name=viewport]').getAttribute('content').then(text => text.includes('user-scalable=no')));
     await page.locator('#t-create').click();
     for (const label of ['Workout name', 'Exercise name', 'Start weight (kg)', 'Start reps']) {
