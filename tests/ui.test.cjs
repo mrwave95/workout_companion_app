@@ -35,7 +35,7 @@ test('keyboard users can start workouts and offscreen exercises stay out of the 
   await withPage(t,async page => {
     await start(page);
     assert.equal(await page.locator('#sessCounter').textContent(), 'Exercise 1 of 2');
-    assert.equal(await page.getByRole('spinbutton', { name: 'Weight (kg)', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('textbox', { name: 'Weight (kg)', exact: true }).count(), 1);
     assert.equal(await page.getByRole('textbox', { name: 'Notes for Squat' }).count(), 1);
     assert.equal(await page.locator('#sessPrev').isDisabled(), true);
     assert.equal(await page.locator('#sessCarouselTrack > .card-slide').nth(1).evaluate(el => el.inert), true);

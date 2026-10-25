@@ -365,6 +365,13 @@ function readNonnegativeInput(input, integer=false){
   const value = Number(input.value);
   return input.value.trim()!=='' && Number.isFinite(value) && value>=0 && (!integer || Number.isInteger(value)) ? value : null;
 }
+function readWeightInput(input){
+  const raw = input.value.trim();
+  // Accept either decimal separator, but never partial numbers or mixed separators.
+  if(!/^\+?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:e[+-]?\d+)?$/i.test(raw)) return null;
+  const value = Number(raw.replace(',', '.'));
+  return Number.isFinite(value) && value>=0 ? value : null;
+}
 function clampNum(n, min, max){ return Math.min(max, Math.max(min, n)); }
 function toast(msg){
   const t = document.getElementById('toast');
@@ -696,7 +703,7 @@ function renderExerciseCardHTML(ex, idx, byRecency){
       <div class="stepper-label">Weight (kg)</div>
       <div class="stepper-row">
         <button class="sbtn" data-act="wdown" data-idx="${idx}" aria-label="Decrease weight" ${ex.finished?'disabled':''}>−</button>
-        <input class="sval mono" type="number" inputmode="decimal" step="0.5" aria-label="Weight (kg)" data-role="weight" data-idx="${idx}" value="${ex.weight}" ${ex.finished?'disabled':''}>
+        <input class="sval mono" type="text" inputmode="decimal" aria-label="Weight (kg)" data-role="weight" data-idx="${idx}" value="${ex.weight}" ${ex.finished?'disabled':''}>
         <button class="sbtn" data-act="wup" data-idx="${idx}" aria-label="Increase weight" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="stepper-label">Reps</div>
@@ -729,7 +736,7 @@ function wireExerciseCards(){
   root.querySelectorAll('[data-role=weight]').forEach(inp=>{
     inp.addEventListener('change', ()=>{
       const ex = state.activeSession.exercises[+inp.dataset.idx];
-      const v = readNonnegativeInput(inp);
+      const v = readWeightInput(inp);
       if(v===null){ inp.value=ex.weight; toast('Enter a non-negative weight'); return; }
       ex.weight = v;
       if(!saveState()) inp.value = state.activeSession.exercises[+inp.dataset.idx].weight;
@@ -776,7 +783,7 @@ function openEditSetModal(exIdx, setIdx){
     <div class="grid2">
       <div class="field">
         <label for="modal-set-weight">Weight (kg)</label>
-        <input type="number" step="0.5" inputmode="decimal" id="modal-set-weight" value="${s.weight}">
+        <input type="text" inputmode="decimal" id="modal-set-weight" value="${s.weight}">
       </div>
       <div class="field">
         <label for="modal-set-reps">Reps</label>
@@ -791,7 +798,7 @@ function openEditSetModal(exIdx, setIdx){
     // A failed write restores a snapshot; resolve the current record on retries.
     const ex = state.activeSession.exercises[exIdx];
     const s = ex.sets[setIdx];
-    const w = readNonnegativeInput(document.getElementById('modal-set-weight'));
+    const w = readWeightInput(document.getElementById('modal-set-weight'));
     const r = readNonnegativeInput(document.getElementById('modal-set-reps'), true);
     if(w===null || r===null){ toast('Enter a valid weight and reps'); return; }
     ex.sets[setIdx] = { ...s, weight:w, reps:r };
@@ -1071,7 +1078,7 @@ function paintCreate(){
       <div class="grid2">
         <div class="field">
           <label for="cw-exweight">Start weight (kg)</label>
-          <input type="number" step="0.5" id="cw-exweight" value="20">
+          <input type="text" inputmode="decimal" id="cw-exweight" value="20">
         </div>
         <div class="field">
           <label for="cw-exreps">Start reps</label>
@@ -1085,7 +1092,7 @@ function paintCreate(){
   `;
   document.getElementById('cw-addex').onclick = ()=>{
     const name = document.getElementById('cw-exname').value.trim();
-    const weight = readNonnegativeInput(document.getElementById('cw-exweight'));
+    const weight = readWeightInput(document.getElementById('cw-exweight'));
     const reps = readNonnegativeInput(document.getElementById('cw-exreps'), true);
     if(!name){ toast('Give the exercise a name'); return; }
     if(weight===null || reps===null){ toast('Enter a non-negative weight and whole rep count'); return; }
