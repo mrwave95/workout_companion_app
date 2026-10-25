@@ -128,6 +128,11 @@
   .empty-state .ee{ font-size:34px; margin-bottom:10px; }
   .empty-state .el{ font-weight:700; color:var(--text); margin-bottom:4px; }
 
+  .exercise-library{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .exercise-library-card{ min-width:0; margin:0; padding:16px; overflow-wrap:anywhere; }
+  .exercise-library-card .t-label{ font-size:15px; }
+  .history-notice{ line-height:1.5; margin:0 0 16px; }
+
   /* ---------- Form fields ---------- */
   .field{ margin-bottom:16px; }
   .field label{ display:block; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); font-weight:700; margin-bottom:7px; }
@@ -245,6 +250,7 @@
   <header id="topbar"><h1 id="topbarTitle">Racked</h1><div id="topbarActions"></div></header>
   <main id="viewport">
     <section id="view-home" class="view"></section>
+    <section id="view-exercises" class="view"></section>
     <section id="view-workouts" class="view"></section>
     <section id="view-session" class="view"></section>
     <section id="view-create" class="view"></section>
@@ -273,7 +279,7 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.6.0';
 
 function defaultState(){
   return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
@@ -436,7 +442,7 @@ document.getElementById('modalOverlay').addEventListener('click', (e)=>{
    ROUTER
    ========================================================= */
 let currentView='home', currentParams={};
-const VIEWS = ['home','workouts','session','create','measure','progress','backup'];
+const VIEWS = ['home','exercises','workouts','session','create','measure','progress','backup'];
 
 function navigate(view, params={}, push=true){
   currentView = view; currentParams = params||{};
@@ -470,8 +476,9 @@ function render(){
     actionsEl.appendChild(back);
   }
 
+  if(currentView==='exercises'){ titleEl.textContent='Exercises'; renderExercisesLibrary(); }
   if(currentView==='workouts'){ titleEl.textContent='Workouts'; renderWorkoutsList(); }
-  if(currentView==='session'){ titleEl.textContent = currentParams.workoutName || 'Session'; renderSession(); }
+  if(currentView==='session'){ titleEl.textContent = state.activeSession?.workoutName || 'Session'; renderSession(); }
   if(currentView==='create'){ titleEl.textContent = currentParams.workoutId ? 'Edit Workout' : 'Create Workout'; renderCreate(currentParams.workoutId); }
   if(currentView==='measure'){ titleEl.textContent='Measurements'; renderMeasure(); }
   if(currentView==='progress'){ titleEl.textContent='Progression'; renderProgress(); }
@@ -496,6 +503,15 @@ function renderHome(){
       <div class="t-label">Create a Workout</div>
       <div class="t-sub">Build a new deck of exercises</div>
     </button>
+    <button type="button" class="tile c-blue" id="t-exercises">
+      <div class="t-bar"></div>
+      <div class="t-label">Exercises</div>
+      <div class="t-sub">Log an exercise without a workout</div>
+    </button>
+    ${state.activeSession?.kind==='exercise' ? `<button type="button" class="tile c-red" id="t-resume-exercise">
+      <div class="t-bar"></div><div class="t-label">Resume Exercise</div>
+      <div class="t-sub">${esc(state.activeSession.exercises[0].name)} · saved in progress</div>
+    </button>` : ''}
     <button type="button" class="tile c-green" id="t-measure">
       <div class="t-bar"></div>
       <div class="t-label">Add Measurements</div>
@@ -514,6 +530,9 @@ function renderHome(){
   `;
   document.getElementById('t-workouts').onclick = ()=>navigate('workouts');
   document.getElementById('t-create').onclick = ()=>navigate('create');
+  document.getElementById('t-exercises').onclick = ()=>navigate('exercises');
+  const resume = document.getElementById('t-resume-exercise');
+  if(resume) resume.onclick = ()=>navigate('session');
   document.getElementById('t-measure').onclick = ()=>navigate('measure');
   document.getElementById('t-progress').onclick = ()=>navigate('progress');
   document.getElementById('t-backup').onclick = ()=>navigate('backup');
@@ -564,7 +583,7 @@ function renderWorkoutsList(){
       const w = state.workouts.find(x=>x.id===id);
       if(confirm(`Delete "${w.name}"? This won't delete past logged sessions.`)){
         state.workouts = state.workouts.filter(x=>x.id!==id);
-        if(state.activeSession && state.activeSession.workoutId===id) state.activeSession=null;
+        if(state.activeSession && state.activeSession.kind!=='exercise' && state.activeSession.workoutId===id) state.activeSession=null;
         if(!saveState()) return; renderWorkoutsList();
       }
     });
@@ -577,7 +596,7 @@ function startOrResumeWorkout(workoutId){
   if(!w) return;
   if(w.exercises.length===0){ toast('Add an exercise before starting this workout'); return; }
 
-  if(state.activeSession && state.activeSession.workoutId===workoutId){
+  if(state.activeSession && state.activeSession.kind!=='exercise' && state.activeSession.workoutId===workoutId){
     const allFinished = state.activeSession.exercises.every(e=>e.finished);
     if(!allFinished){
       navigate('session', {workoutId, workoutName:w.name});
@@ -590,14 +609,14 @@ function startOrResumeWorkout(workoutId){
     state.activeSession = null;
     if(!saveState()) return;
     toast('Previous session saved — starting fresh');
-  } else if(state.activeSession && state.activeSession.workoutId!==workoutId){
+  } else if(state.activeSession){
     if(!confirm(`You have an unfinished session for "${state.activeSession.workoutName}". Discard it and start "${w.name}"?`)) return;
   }
 
   state.activeSession = {
     id: uid(), workoutId: w.id, workoutName: w.name, date: new Date().toISOString(),
     exercises: w.exercises.map(ex=>({
-      exerciseId: ex.id, name: ex.name, notes:'', weight: ex.weight, reps: ex.reps,
+      exerciseId: ex.id, catalogId: exerciseCatalogId(ex), name: ex.name, notes:'', weight: ex.weight, reps: ex.reps,
       startWeight: ex.weight, startReps: ex.reps,
       sets: [], finished:false
     }))
@@ -636,11 +655,11 @@ function renderSession(startIndex){
         <button class="nav-arrow" id="sessNext" aria-label="Next exercise">›</button>
       </div>
     </div>
-    <button class="btn ${allFinished?'positive':'ghost'}" id="sessFinishBottom" style="margin-top:4px;">${allFinished?'✓ Finish Workout':'Finish Workout'}</button>
+    ${sess.kind==='exercise' ? '' : `<button class="btn ${allFinished?'positive':'ghost'}" id="sessFinishBottom" style="margin-top:4px;">${allFinished?'✓ Finish Workout':'Finish Workout'}</button>`}
   `;
   const updateCounter = (i)=>{
     const c = document.getElementById('sessCounter');
-    if(c) c.textContent = `Exercise ${i+1} of ${sess.exercises.length}`;
+    if(c) c.textContent = sess.kind==='exercise' ? 'Individual exercise · saved in progress' : `Exercise ${i+1} of ${sess.exercises.length}`;
   };
   updateCounter(restoreIndex);
   buildDots('sessDots', sess.exercises.length, restoreIndex);
@@ -653,21 +672,24 @@ function renderSession(startIndex){
   );
   document.getElementById('sessPrev').onclick = ()=>sessionCarousel.prev();
   document.getElementById('sessNext').onclick = ()=>sessionCarousel.next();
-  document.getElementById('sessFinishBottom').onclick = finishWorkout;
+  const finish = document.getElementById('sessFinishBottom');
+  if(finish) finish.onclick = finishWorkout;
 
   wireExerciseCards();
+  if(sess.kind==='exercise' && sess.editSetDraft){
+    openEditSetModal(sess.editSetDraft.exerciseIndex, sess.editSetDraft.setIndex);
+  }
 }
 
 // Uses est1RM's "best set" logic (same as the progression chart) to find the
-// top set of each of the last two sessions for this exercise, by name. If the
+// top set of each of the last two sessions for this exercise identity. If the
 // rep count matches both times, that's a plateau worth a gentle nudge.
-function getRepProgressionHint(exerciseName, byRecency){
-  const key = (exerciseName||'').trim().toLowerCase();
-  if(!key) return null;
+function getRepProgressionHint(exercise, byRecency){
+  const key = exerciseCatalogId(exercise);
   const bySession = [];
   for(const sess of byRecency){
     for(const ex of sess.exercises){
-      if((ex.name||'').trim().toLowerCase()===key && ex.sets.length>0){
+      if(exerciseCatalogId(ex)===key && ex.sets.length>0){
         const best = ex.sets.reduce((m,s)=>{
           const e1 = est1RM(s.weight, s.reps);
           return e1>m.e ? {e:e1, weight:s.weight, reps:s.reps} : m;
@@ -687,9 +709,11 @@ function getRepProgressionHint(exerciseName, byRecency){
 }
 
 function renderExerciseCardHTML(ex, idx, byRecency){
+  const draft = state.activeSession.kind==='exercise' ? ex.draftInputs : null;
   const setsHtml = ex.sets.map((s,si)=>`<button type="button" class="set-chip" data-exidx="${idx}" data-setidx="${si}">${s.weight}×${s.reps}</button>`).join('');
-  const lastTime = (ex.startWeight!=null) ? `<div class="muted" style="margin-top:-8px; margin-bottom:14px;">Last time: ${ex.startWeight}kg × ${ex.startReps}</div>` : '';
-  const repHint = getRepProgressionHint(ex.name, byRecency);
+  const previous = getLastSetForExercise(exerciseCatalogId(ex));
+  const lastTime = (ex.startWeight!=null) ? `<div class="muted" style="margin-top:-8px; margin-bottom:14px;">${previous ? 'Last time' : 'Starting values'}: ${previous?.weight ?? ex.startWeight}kg × ${previous?.reps ?? ex.startReps}</div>` : '';
+  const repHint = getRepProgressionHint(ex, byRecency);
   const repHintHtml = repHint ? `<div class="progress-hint">↗ ${esc(repHint)}</div>` : '';
   return `
   <div class="card-slide">
@@ -703,13 +727,13 @@ function renderExerciseCardHTML(ex, idx, byRecency){
       <div class="stepper-label">Weight (kg)</div>
       <div class="stepper-row">
         <button class="sbtn" data-act="wdown" data-idx="${idx}" aria-label="Decrease weight" ${ex.finished?'disabled':''}>−</button>
-        <input class="sval mono" type="text" inputmode="decimal" aria-label="Weight (kg)" data-role="weight" data-idx="${idx}" value="${ex.weight}" ${ex.finished?'disabled':''}>
+        <input class="sval mono" type="text" inputmode="decimal" aria-label="Weight (kg)" data-role="weight" data-idx="${idx}" value="${esc(draft?.weight ?? ex.weight)}" ${ex.finished?'disabled':''}>
         <button class="sbtn" data-act="wup" data-idx="${idx}" aria-label="Increase weight" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="stepper-label">Reps</div>
       <div class="stepper-row">
         <button class="sbtn" data-act="rdown" data-idx="${idx}" aria-label="Decrease reps" ${ex.finished?'disabled':''}>−</button>
-        <input class="sval mono" type="number" inputmode="numeric" step="1" aria-label="Reps" data-role="reps" data-idx="${idx}" value="${ex.reps}" ${ex.finished?'disabled':''}>
+        <input class="sval mono" type="number" inputmode="numeric" step="1" aria-label="Reps" data-role="reps" data-idx="${idx}" value="${esc(draft?.reps ?? ex.reps)}" ${ex.finished?'disabled':''}>
         <button class="sbtn" data-act="rup" data-idx="${idx}" aria-label="Increase reps" ${ex.finished?'disabled':''}>+</button>
       </div>
       <div class="set-log">
@@ -734,19 +758,23 @@ function wireExerciseCards(){
     });
   });
   root.querySelectorAll('[data-role=weight]').forEach(inp=>{
+    persistIndividualInput(inp, 'weight');
     inp.addEventListener('change', ()=>{
       const ex = state.activeSession.exercises[+inp.dataset.idx];
       const v = readWeightInput(inp);
-      if(v===null){ inp.value=ex.weight; toast('Enter a non-negative weight'); return; }
+      if(v===null){ if(state.activeSession.kind!=='exercise') inp.value=ex.weight; toast('Enter a non-negative weight'); return; }
+      if(state.activeSession.kind==='exercise') return; // input already persisted the draft and value
       ex.weight = v;
       if(!saveState()) inp.value = state.activeSession.exercises[+inp.dataset.idx].weight;
     });
   });
   root.querySelectorAll('[data-role=reps]').forEach(inp=>{
+    persistIndividualInput(inp, 'reps');
     inp.addEventListener('change', ()=>{
       const ex = state.activeSession.exercises[+inp.dataset.idx];
       const v = readNonnegativeInput(inp, true);
-      if(v===null){ inp.value=ex.reps; toast('Enter a whole, non-negative rep count'); return; }
+      if(v===null){ if(state.activeSession.kind!=='exercise') inp.value=ex.reps; toast('Enter a whole, non-negative rep count'); return; }
+      if(state.activeSession.kind==='exercise') return;
       ex.reps = v;
       if(!saveState()) inp.value = state.activeSession.exercises[+inp.dataset.idx].reps;
     });
@@ -759,12 +787,26 @@ function wireExerciseCards(){
   });
 }
 
+function persistIndividualInput(input, role){
+  if(state.activeSession.kind!=='exercise') return;
+  input.addEventListener('input', ()=>{
+    const ex = state.activeSession.exercises[+input.dataset.idx];
+    ex.draftInputs = {...ex.draftInputs, [role]:input.value};
+    const value = role==='weight' ? readWeightInput(input) : readNonnegativeInput(input, true);
+    if(value!==null) ex[role] = value;
+    if(!saveState()){
+      const saved = state.activeSession.exercises[+input.dataset.idx];
+      input.value = saved.draftInputs?.[role] ?? saved[role];
+    }
+  });
+}
+
 // If the exercise has already been finished, keep the workout's stored
 // "last weight/reps" default in sync with whatever the last set now is,
 // so an edit or delete after finishing isn't silently overridden next time.
 function syncWorkoutDefaultsIfFinished(exIdx){
   const ex = state.activeSession.exercises[exIdx];
-  if(!ex.finished) return;
+  if(!ex.finished || state.activeSession.kind==='exercise') return;
   const last = ex.sets[ex.sets.length-1] || {weight:ex.startWeight, reps:ex.startReps};
   const w = state.workouts.find(w=>w.id===state.activeSession.workoutId);
   if(w){
@@ -774,6 +816,8 @@ function syncWorkoutDefaultsIfFinished(exIdx){
 }
 
 function openEditSetModal(exIdx, setIdx){
+  const pending = state.activeSession.kind==='exercise' ? state.activeSession.editSetDraft : null;
+  if(pending){ exIdx = pending.exerciseIndex; setIdx = pending.setIndex; }
   const ex = state.activeSession.exercises[exIdx];
   const s = ex.sets[setIdx];
   if(!s) return;
@@ -783,17 +827,32 @@ function openEditSetModal(exIdx, setIdx){
     <div class="grid2">
       <div class="field">
         <label for="modal-set-weight">Weight (kg)</label>
-        <input type="text" inputmode="decimal" id="modal-set-weight" value="${s.weight}">
+        <input type="text" inputmode="decimal" id="modal-set-weight" value="${esc(pending?.weight ?? s.weight)}">
       </div>
       <div class="field">
         <label for="modal-set-reps">Reps</label>
-        <input type="number" step="1" inputmode="numeric" id="modal-set-reps" value="${s.reps}">
+        <input type="number" step="1" inputmode="numeric" id="modal-set-reps" value="${esc(pending?.reps ?? s.reps)}">
       </div>
     </div>
     <button class="btn primary" id="modal-set-save">Save Changes</button>
     <button class="btn ghost" id="modal-set-delete" style="margin-top:10px; color:var(--red);">Delete Set</button>
     <button class="btn ghost" id="modal-set-cancel" style="margin-top:10px;">Cancel</button>
   `);
+  if(state.activeSession.kind==='exercise'){
+    for(const role of ['weight','reps']){
+      document.getElementById('modal-set-'+role).addEventListener('input', ()=>{
+        state.activeSession.editSetDraft = {exerciseIndex:exIdx, setIndex:setIdx,
+          weight:document.getElementById('modal-set-weight').value,
+          reps:document.getElementById('modal-set-reps').value};
+        if(!saveState()){
+          const saved = state.activeSession.editSetDraft;
+          const set = state.activeSession.exercises[exIdx].sets[setIdx];
+          document.getElementById('modal-set-weight').value = saved?.weight ?? set.weight;
+          document.getElementById('modal-set-reps').value = saved?.reps ?? set.reps;
+        }
+      });
+    }
+  }
   document.getElementById('modal-set-save').onclick = ()=>{
     // A failed write restores a snapshot; resolve the current record on retries.
     const ex = state.activeSession.exercises[exIdx];
@@ -803,6 +862,7 @@ function openEditSetModal(exIdx, setIdx){
     if(w===null || r===null){ toast('Enter a valid weight and reps'); return; }
     ex.sets[setIdx] = { ...s, weight:w, reps:r };
     syncWorkoutDefaultsIfFinished(exIdx);
+    delete state.activeSession.editSetDraft;
     if(!saveState()) return;
     hideModal();
     renderSession(exIdx);
@@ -813,16 +873,42 @@ function openEditSetModal(exIdx, setIdx){
     if(!confirm('Delete this set?')) return;
     ex.sets.splice(setIdx, 1);
     syncWorkoutDefaultsIfFinished(exIdx);
+    delete state.activeSession.editSetDraft;
     if(!saveState()) return;
     hideModal();
     renderSession(exIdx);
     toast('Set deleted');
   };
-  document.getElementById('modal-set-cancel').onclick = hideModal;
+  document.getElementById('modal-set-cancel').onclick = ()=>{
+    if(state.activeSession.kind==='exercise' && state.activeSession.editSetDraft){
+      delete state.activeSession.editSetDraft;
+      if(!saveState()) return;
+    }
+    hideModal();
+  };
 }
 
 function onExerciseAction(act, idx){
   const ex = state.activeSession.exercises[idx];
+  if(state.activeSession.kind==='exercise' && (act==='logset' || act==='finishex')){
+    if(state.activeSession.editSetDraft){
+      const draft = state.activeSession.editSetDraft;
+      openEditSetModal(draft.exerciseIndex, draft.setIndex);
+      toast('Save or cancel your set edit first');
+      return;
+    }
+    const weight = readWeightInput({value:String(ex.draftInputs?.weight ?? ex.weight)});
+    const reps = readNonnegativeInput({value:String(ex.draftInputs?.reps ?? ex.reps)}, true);
+    if(weight===null || reps===null){ toast('Enter a valid weight and whole rep count'); return; }
+    ex.weight = weight; ex.reps = reps;
+    if(act==='finishex'){ finishIndividualExercise(); return; }
+  }
+  if(act==='wup' || act==='wdown'){
+    if(ex.draftInputs) delete ex.draftInputs.weight;
+  }
+  if(act==='rup' || act==='rdown'){
+    if(ex.draftInputs) delete ex.draftInputs.reps;
+  }
   if(act==='wup' || act==='wdown'){
     const next = ex.weight + (act==='wup' ? 0.5 : -0.5);
     if(!Number.isFinite(next)){ toast('Enter a finite weight'); return; }
@@ -864,6 +950,7 @@ function onExerciseAction(act, idx){
 function finishWorkout(){
   const sess = state.activeSession;
   if(!sess) return;
+  if(sess.kind==='exercise'){ finishIndividualExercise(); return; }
   const anySets = sess.exercises.some(e=>e.sets.length>0);
   if(!anySets){
     if(!confirm('No sets logged yet. Finish workout anyway?')) return;
@@ -951,86 +1038,138 @@ function buildDots(containerId, count, active){
 }
 
 /* =========================================================
-   CREATE WORKOUT
+   EXERCISES AND WORKOUT CREATION
    ========================================================= */
 let draftDeck = [];
 let keepName = '';
 let editingWorkoutId = null;
-let knownExerciseNames = [];
 
-// Every exercise name the user has ever used, deduped case-insensitively.
-// When the same name exists in different casings, the most recently logged
-// casing wins, so the suggestion nudges toward the name actually in use.
-function getKnownExerciseNames(){
-  const seen = new Map(); // lowercase -> canonical display form
-  const byRecency = [...state.sessions].sort((a,b)=> new Date(b.date) - new Date(a.date));
-  byRecency.forEach(s=>{
-    s.exercises.forEach(ex=>{
-      const key = (ex.name||'').trim().toLowerCase();
-      if(key && !seen.has(key)) seen.set(key, ex.name.trim());
-    });
-  });
-  state.workouts.forEach(w=>{
-    w.exercises.forEach(ex=>{
-      const key = (ex.name||'').trim().toLowerCase();
-      if(key && !seen.has(key)) seen.set(key, ex.name.trim());
-    });
-  });
-  return Array.from(seen.values());
+// A catalog identity is separate from a template card's id/session exerciseId.
+// Legacy records have no persistent identity. Preserve their existing name groups
+// verbatim (including all sets), without retroactively asserting shared identity.
+function exerciseCatalogId(ex){
+  return ex.catalogId || 'legacy-name:'+JSON.stringify(ex.name.trim().toLowerCase());
 }
-
-// Where you actually left off on an exercise, by name. Prefers the last set
-// you really logged (most accurate), falling back to a workout's stored
-// default only if there's no session history for it at all.
-function getRecentDefaultsForName(name){
-  const key = (name||'').trim().toLowerCase();
-  if(!key) return null;
-  const byRecency = [...state.sessions].sort((a,b)=> new Date(b.date) - new Date(a.date));
-  for(const sess of byRecency){
+function getKnownExercises(){
+  const known = new Map();
+  const add = (ex, source)=>{
+    if(!ex.name.trim()) return;
+    const id = exerciseCatalogId(ex);
+    if(!known.has(id)) known.set(id, {id, name:ex.name, source});
+  };
+  if(state.activeSession) state.activeSession.exercises.forEach(ex=>add(ex, state.activeSession.workoutName));
+  [...state.sessions].sort((a,b)=>new Date(b.date)-new Date(a.date))
+    .forEach(s=>s.exercises.forEach(ex=>add(ex, s.workoutName)));
+  state.workouts.forEach(w=>w.exercises.forEach(ex=>add(ex, w.name)));
+  return [...known.values()];
+}
+function hasLegacyExerciseHistory(){
+  return state.sessions.some(s=>s.exercises.some(ex=>!ex.catalogId));
+}
+function legacyHistoryNotice(){
+  return hasLegacyExerciseHistory() ? `<p class="muted history-notice">Older history is grouped by name as before. Identical names may have meant different exercises; those records have not been relinked or changed.</p>` : '';
+}
+function getLastSetForExercise(id){
+  let last = null, lastTime = -Infinity;
+  for(const sess of state.sessions){
     for(const ex of sess.exercises){
-      if((ex.name||'').trim().toLowerCase()===key && ex.sets.length>0){
-        const last = ex.sets[ex.sets.length-1];
-        return { weight: last.weight, reps: last.reps };
+      if(exerciseCatalogId(ex)!==id) continue;
+      for(const set of ex.sets){
+        const time = Date.parse(set.time || sess.date);
+        if(time>=lastTime){ last = set; lastTime = time; }
       }
     }
   }
+  return last;
+}
+function getRecentDefaultsForExercise(id){
+  const last = getLastSetForExercise(id);
+  if(last) return {weight:last.weight, reps:last.reps};
   for(const w of state.workouts){
-    for(const ex of w.exercises){
-      if((ex.name||'').trim().toLowerCase()===key){
-        return { weight: ex.weight, reps: ex.reps };
-      }
-    }
+    const ex = w.exercises.find(ex=>exerciseCatalogId(ex)===id);
+    if(ex) return {weight:ex.weight, reps:ex.reps};
   }
-  return null;
+  return {weight:20, reps:8};
+}
+function exerciseSourceLabel(ex, known){
+  if(known.filter(other=>other.name.trim().toLowerCase()===ex.name.trim().toLowerCase()).length<2) return '';
+  // Separate same-name IDs remain selectable, including after category imports.
+  const peers = known.filter(other=>other.name.trim().toLowerCase()===ex.name.trim().toLowerCase());
+  return ` · ${ex.source} · history ${peers.findIndex(other=>other.id===ex.id)+1}`;
+}
+function renderExercisesLibrary(){
+  const el = document.getElementById('view-exercises');
+  const known = getKnownExercises();
+  if(!known.length){
+    el.innerHTML = `<div class="empty-state"><div class="ee">🏋️</div><div class="el">No exercises yet</div><div>Exercises from your workouts and history appear here.</div></div>`;
+    return;
+  }
+  el.innerHTML = legacyHistoryNotice()+`<div class="exercise-library">${known.map(ex=>{
+    const last = getLastSetForExercise(ex.id);
+    const resume = state.activeSession?.kind==='exercise' && exerciseCatalogId(state.activeSession.exercises[0])===ex.id;
+    return `<button type="button" class="tile exercise-library-card" data-catalog-id="${esc(ex.id)}">
+      <div class="t-label">${esc(ex.name)}</div>
+      <div class="t-sub">${last ? `${last.weight} kg × ${last.reps} reps` : 'No logged sets'}${esc(exerciseSourceLabel(ex, known))}</div>
+      ${resume ? '<div class="t-sub">Resume · saved in progress</div>' : ''}
+    </button>`;
+  }).join('')}</div>`;
+  el.querySelectorAll('[data-catalog-id]').forEach(button=>{
+    button.onclick = ()=>startLibraryExercise(button.dataset.catalogId);
+  });
+}
+function startLibraryExercise(id){
+  const known = getKnownExercises().find(ex=>ex.id===id);
+  if(!known) return;
+  if(state.activeSession?.kind==='exercise' && exerciseCatalogId(state.activeSession.exercises[0])===id){
+    navigate('session'); return;
+  }
+  if(state.activeSession && !confirm(`You have an unfinished session for "${state.activeSession.workoutName}". Discard it and start "${known.name}"?`)) return;
+  const defaults = getRecentDefaultsForExercise(id);
+  state.activeSession = {
+    id:uid(), kind:'exercise', workoutId:'library:'+id, workoutName:known.name, date:new Date().toISOString(),
+    exercises:[{exerciseId:uid(), catalogId:id, name:known.name, notes:'', ...defaults,
+      startWeight:defaults.weight, startReps:defaults.reps, sets:[], finished:false}]
+  };
+  if(!saveState()) return;
+  navigate('session');
+}
+function finishIndividualExercise(){
+  const sess = state.activeSession;
+  if(!sess || sess.kind!=='exercise') return;
+  if(!sess.exercises[0].sets.length && !confirm('No sets logged yet. Finish exercise anyway?')) return;
+  sess.exercises[0].finished = true;
+  state.sessions.push(JSON.parse(JSON.stringify(sess)));
+  state.activeSession = null;
+  if(!saveState()){ renderSession(); return; }
+  toast('Exercise saved');
+  navigate('exercises', {}, false);
+  history.replaceState({view:'exercises', params:{}}, '', '#exercises');
 }
 
+let selectedCatalogId = null;
 function renderExerciseSuggestions(query, box, inputEl){
+  selectedCatalogId = null;
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; return; }
-  const matches = knownExerciseNames
-    .filter(n => n.toLowerCase().includes(q))
-    .slice(0, 6);
-  if(matches.length===0){ box.innerHTML=''; return; }
-  box.innerHTML = matches.map(n=>`<button type="button" class="suggest-item">${esc(n)}</button>`).join('');
-  box.querySelectorAll('.suggest-item').forEach(btn=>{
+  const known = getKnownExercises();
+  const matches = known.filter(ex=>ex.name.toLowerCase().includes(q)).slice(0,6);
+  box.innerHTML = matches.map(ex=>`<button type="button" class="suggest-item" data-catalog-id="${esc(ex.id)}">${esc(ex.name)}${esc(exerciseSourceLabel(ex, known))}</button>`).join('');
+  box.querySelectorAll('.suggest-item').forEach((btn,i)=>{
     btn.addEventListener('click', ()=>{
-      inputEl.value = btn.textContent;
+      const ex = matches[i];
+      inputEl.value = ex.name;
+      selectedCatalogId = ex.id;
       box.innerHTML = '';
-      const defaults = getRecentDefaultsForName(btn.textContent);
-      if(defaults){
-        const wEl = document.getElementById('cw-exweight');
-        const rEl = document.getElementById('cw-exreps');
-        if(wEl) wEl.value = defaults.weight;
-        if(rEl) rEl.value = defaults.reps;
-        toast(`Picked up where you left off: ${defaults.weight}kg × ${defaults.reps}`);
-      }
+      const defaults = getRecentDefaultsForExercise(ex.id);
+      document.getElementById('cw-exweight').value = defaults.weight;
+      document.getElementById('cw-exreps').value = defaults.reps;
       inputEl.focus();
     });
   });
 }
 
 function renderCreate(workoutId){
-  knownExerciseNames = getKnownExerciseNames();
+  selectedCatalogId = null;
   if(workoutId){
     const w = state.workouts.find(x=>x.id===workoutId);
     if(w){
@@ -1096,7 +1235,13 @@ function paintCreate(){
     const reps = readNonnegativeInput(document.getElementById('cw-exreps'), true);
     if(!name){ toast('Give the exercise a name'); return; }
     if(weight===null || reps===null){ toast('Enter a non-negative weight and whole rep count'); return; }
-    draftDeck.push({id:uid(), name, weight, reps});
+    const matches = [...getKnownExercises(), ...draftDeck.map(ex=>({id:exerciseCatalogId(ex), name:ex.name}))]
+      .filter(ex=>ex.name.trim().toLowerCase()===name.toLowerCase());
+    const ids = [...new Set(matches.map(ex=>ex.id))];
+    if(!selectedCatalogId && ids.length>1){ toast('Choose an exercise suggestion to keep its history separate'); return; }
+    const catalogId = selectedCatalogId || ids[0] || 'exercise:'+uid();
+    draftDeck.push({id:uid(), catalogId, name, weight, reps});
+    selectedCatalogId = null;
     paintCreate();
   };
   const exNameEl = document.getElementById('cw-exname');
@@ -1255,17 +1400,14 @@ function est1RM(weight, reps){
 
 function paintWorkoutProgress(){
   const body = document.getElementById('prog-body');
-  // Group by exercise name (case-insensitive), not by internal IDs. This means
-  // the same exercise logged under different workouts consolidates into one
-  // chart, and re-adding a previously removed exercise continues its old
-  // history instead of silently starting a disconnected new one.
+  // Persistent identities share history across templates and individual logs.
+  // The resolver retains the old name groups only for unidentified legacy data.
   const groups = Object.create(null);
   const sortedSessions = [...state.sessions].sort((a,b)=> new Date(a.date) - new Date(b.date));
   sortedSessions.forEach(sess=>{
     sess.exercises.forEach(ex=>{
-      if(ex.sets.length===0) return;
-      const key = (ex.name||'').trim().toLowerCase();
-      if(!key) return;
+      if(ex.sets.length===0 || !ex.name.trim()) return;
+      const key = exerciseCatalogId(ex);
       if(!groups[key]) groups[key] = { name: ex.name, workoutName: sess.workoutName, points: [] };
       // Sessions are processed oldest-first, so re-assigning the label on every
       // match means it ends up reflecting the most recently logged name/workout,
@@ -1281,11 +1423,12 @@ function paintWorkoutProgress(){
   });
   const keys = Object.keys(groups);
   if(keys.length===0){
-    body.innerHTML = `<div class="empty-state"><div class="ee">📈</div><div class="el">No logged sets yet</div><div>Finish a workout to see progress here.</div></div>`;
+    body.innerHTML = `<div class="empty-state"><div class="ee">📈</div><div class="el">No logged sets yet</div><div>Finish a workout or individual exercise to see progress here.</div></div>`;
     return;
   }
   keys.forEach(k=> groups[k].points.sort((a,b)=>a.date-b.date));
   renderProgressCarousel(body, keys.map(k=>groups[k]), 'red', {unit:'kg', metricLabel:'Est. 1RM'});
+  body.insertAdjacentHTML('afterbegin', legacyHistoryNotice());
 }
 
 function paintSizeProgress(){
@@ -1631,6 +1774,21 @@ function dateValue(value, fallback){
   }
   return date;
 }
+function exerciseIdentityFields(ex){
+  const fields = {};
+  if(ex.catalogId!==undefined){
+    if(typeof ex.catalogId!=='string' || !ex.catalogId.trim()) throw new Error('Invalid exercise identity');
+    fields.catalogId = ex.catalogId;
+  }
+  if(ex.draftInputs!==undefined){
+    const draft = requireRecord(ex.draftInputs);
+    for(const role of ['weight','reps']){
+      if(draft[role]!==undefined && typeof draft[role]!=='string') throw new Error('Invalid input draft');
+    }
+    fields.draftInputs = {...draft};
+  }
+  return fields;
+}
 function normalizeWorkouts(arr){
   return recordArray(arr).map(record=>{
     const w = requireRecord(record);
@@ -1638,7 +1796,7 @@ function normalizeWorkouts(arr){
       ...w, id:idValue(w.id), name:textValue(w.name,'Untitled'),
       exercises:recordArray(w.exercises).map(record=>{
         const ex = requireRecord(record);
-        return {...ex, id:idValue(ex.id), name:textValue(ex.name,'Exercise'),
+        return {...ex, ...exerciseIdentityFields(ex), id:idValue(ex.id), name:textValue(ex.name,'Exercise'),
           weight:numericValue(ex.weight), reps:Math.round(numericValue(ex.reps)), notes:textValue(ex.notes)};
       })
     };
@@ -1647,6 +1805,15 @@ function normalizeWorkouts(arr){
 function normalizeSessions(arr){
   return recordArray(arr).map(record=>{
     const s = requireRecord(record);
+    if(s.kind==='exercise'){
+      if(!Array.isArray(s.exercises) || s.exercises.length!==1) throw new Error('Invalid individual exercise session');
+      if(s.editSetDraft!==undefined){
+        const draft = requireRecord(s.editSetDraft);
+        if(draft.exerciseIndex!==0 || !Number.isInteger(draft.setIndex) || draft.setIndex<0 ||
+          !Array.isArray(s.exercises[0]?.sets) || !s.exercises[0].sets[draft.setIndex] ||
+          typeof draft.weight!=='string' || typeof draft.reps!=='string') throw new Error('Invalid set edit draft');
+      }
+    }
     return {
       ...s, id:idValue(s.id), workoutId:idValue(s.workoutId),
       workoutName:textValue(s.workoutName,'Workout'), date:dateValue(s.date,new Date().toISOString()),
@@ -1654,12 +1821,12 @@ function normalizeSessions(arr){
         const ex = requireRecord(record);
         const sets = recordArray(ex.sets).map(record=>{
           const set = requireRecord(record);
-          return {...set, weight:numericValue(set.weight), reps:Math.round(numericValue(set.reps)), time:dateValue(set.time,new Date().toISOString())};
+          return {...set, weight:numericValue(set.weight), reps:Math.round(numericValue(set.reps)), time:dateValue(set.time,dateValue(s.date,new Date().toISOString()))};
         });
         const last = sets[sets.length-1];
         const weight = numericValue(ex.weight, last ? last.weight : numericValue(ex.startWeight));
         const reps = Math.round(numericValue(ex.reps, last ? last.reps : numericValue(ex.startReps)));
-        return {...ex, exerciseId:idValue(ex.exerciseId), name:textValue(ex.name,'Exercise'),
+        return {...ex, ...exerciseIdentityFields(ex), exerciseId:idValue(ex.exerciseId), name:textValue(ex.name,'Exercise'),
           notes:textValue(ex.notes), finished:!!ex.finished, sets, weight, reps,
           startWeight:numericValue(ex.startWeight,weight), startReps:Math.round(numericValue(ex.startReps,reps))};
       })

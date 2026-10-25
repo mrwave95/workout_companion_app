@@ -4,7 +4,8 @@
 
 - Racked is a local-only workout and body-measurement PWA: create/reorder workout
   decks, log/edit/delete sets, finish/reopen exercises, resume sessions, chart
-  progress, and import/export JSON backups.
+  progress, log individual exercises from the Exercises library, and import/export
+  JSON backups.
 - Keep the static, self-contained architecture: UI, CSS, state and charts live in
   `index.html`; offline caching lives in `sw.js`; `manifest.json` and two PNGs
   provide install metadata. No production packages, API, bundler or build step.
@@ -12,6 +13,15 @@
   engineering tradeoffs, browser evidence and release limitations.
 
 ## Data integrity
+
+- `catalogId` is persistent exercise identity; template `id` and session
+  `exerciseId` are card-instance references. Use `exerciseCatalogId()` consistently
+  for library/defaults/hints/charts. Never merge different explicit IDs by name.
+  Unidentified legacy records retain the documented name groups without rewriting
+  historical IDs/sets. This grouping cannot prove historical exercise identity.
+- Individual logging uses `activeSession.kind === 'exercise'` and normal session
+  history, never a saved template. Preserve `draftInputs` and `editSetDraft` through
+  restarts/backups; finishing atomically archives once and clears the active record.
 
 - Preserve `racked_state_v1` and its version-1 JSON compatibility: `workouts`,
   `sessions`, `measurements`, and nullable `activeSession`. Keep IDs, notes,
@@ -56,7 +66,7 @@
   when available. A restricted home cache can use `--cache /tmp/racked-npm-cache`.
 - Unit checks: `node --test tests/data.test.cjs tests/sw.test.cjs`.
 - Optional second engine: `npx playwright install webkit`, then
-  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs`.
+  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs`.
 - Run relevant checks after edits, the full suite before review, and
   `git diff --check`. Report failures, skips and unverified browsers honestly.
 

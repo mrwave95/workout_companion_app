@@ -56,3 +56,17 @@ Remaining opportunities are duplicate-ID diagnostics, accessible chart tables an
 ## GitHub Pages
 
 Keep the existing **Deploy from a branch → main → /(root)** configuration and site URL. The proposed publishing workflow was unnecessary and has been removed; no replacement or settings change is needed. Testing CI remains independent of publishing. Changes to `main` publish the site, so merging or pushing directly to `main` requires explicit approval. Development files remain in the repository and are not loaded by the app.
+
+## Exercises library (v1.6.0)
+
+The Exercises menu uses a two-column library drawn from templates, session history, and the active session. It reuses the session carousel, controls, set editor, notes, and persistence. An individual session is marked `kind: 'exercise'`; its synthetic workout reference does not create a workout template. Finish saves one normal history entry and clears the active session in one guarded write. Switching sessions still requires explicit discard confirmation.
+
+`catalogId` is additive persistent identity on new template/session exercise records. Instance IDs remain intact. Library defaults, previous-performance hints, and charts use the same identity resolver; last-set defaults compare set timestamps, falling back to the session date for historical sets without a time. Explicit identities are never merged just because names match. Known-exercise suggestions carry identity, including when adding the same exercise to different templates. Identity lives on the records so category exports remain self-contained.
+
+There is no destructive migration: old records without identity keep their existing name-based chart groups under a stable `legacy-name:` compatibility key. The library and progression view disclose that identical names may have represented different exercises. Neither shared spelling nor an old card ID can establish true historical identity, and this release does not retroactively relink records, split histories, deduplicate sets, or infer renames. Mixed identified/legacy imports can therefore show separate same-name history cards; this is deliberate rather than silently guessing a link.
+
+Individual numeric input drafts and set-editor drafts persist on input, including incomplete strings, and reopen on resume. Invalid controls cannot log stale numeric values or finish; pending set edits must be saved or cancelled. Failed writes retain the durable snapshot, including on finish and editor retries. Full/category backups preserve optional IDs and draft metadata; malformed supplied identity/draft metadata is rejected before replacement.
+
+Compatibility continues to target Android Chrome and Safari/iOS 15.5+ using the existing static architecture and browser API baseline. New Chromium regression coverage does not constitute real-device Apple validation. Refresh older loaded tabs before using the new version; older code cannot enforce the new identity semantics.
+
+Validation for this change: all **75 tests passed** with zero failures/skips (58 existing plus 17 focused identity/library/draft/validation cases). Application JavaScript parsing, whitespace checks, and mobile layout checks at 320/390/768px passed; production dependencies remain empty. The new Exercises browser suite is included in the existing WebKit CI command. Local WebKit installation was attempted with a writable cache but both download hosts returned HTTP 403 `Domain forbidden`; it was not run locally. Real Android Chrome and iPhone Safari validation remains outstanding.
