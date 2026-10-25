@@ -131,6 +131,8 @@
   .exercise-library{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
   .exercise-library-card{ min-width:0; margin:0; padding:16px; overflow-wrap:anywhere; }
   .exercise-library-card .t-label{ font-size:15px; }
+  .exercise-library-item{ min-width:0; }
+  .exercise-library-item .text-btn{ width:100%; }
   .history-notice{ line-height:1.5; margin:0 0 16px; }
 
   /* ---------- Form fields ---------- */
@@ -279,10 +281,10 @@
    STORAGE
    ========================================================= */
 const STORAGE_KEY = 'racked_state_v1';
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 
 function defaultState(){
-  return { version:1, workouts:[], sessions:[], measurements:[], activeSession:null };
+  return { version:2, exercises:[], workouts:[], sessions:[], measurements:[], activeSession:null };
 }
 // Keep the last durable snapshot so failed writes cannot masquerade as saved changes.
 let persistedStateJSON = JSON.stringify(defaultState());
@@ -309,7 +311,7 @@ function loadState(){
     console.error('load failed', e);
     storageRecoveryRaw = raw;
     storageReadFailed = raw===null;
-    alert('Saved data could not be loaded. It has not been changed. Export a Full Backup to recover the original data, or restore a valid full backup before making changes.');
+    alert('Saved data could not be loaded: '+e.message+'. It has not been changed. Export a Full Backup to recover the original data, or restore a valid full backup before making changes.');
     return defaultState();
   }
 }
@@ -393,7 +395,8 @@ function showModal(html){
   modalReturnFocus = document.activeElement;
   const card = document.getElementById('modalCard');
   card.innerHTML = html;
-  const heading = card.querySelector('.eyebrow');
+  const heading = card.querySelector('.eyebrow, .h2');
+  card.removeAttribute('aria-labelledby');
   if(heading){ heading.id = 'modalTitle'; card.setAttribute('aria-labelledby', heading.id); }
   document.getElementById('modalOverlay').classList.add('show');
   document.getElementById('app').inert = true;
@@ -478,7 +481,7 @@ function render(){
 
   if(currentView==='exercises'){ titleEl.textContent='Exercises'; renderExercisesLibrary(); }
   if(currentView==='workouts'){ titleEl.textContent='Workouts'; renderWorkoutsList(); }
-  if(currentView==='session'){ titleEl.textContent = state.activeSession?.workoutName || 'Session'; renderSession(); }
+  if(currentView==='session'){ titleEl.textContent = state.activeSession?.kind==='exercise' ? exerciseName(state.activeSession.exercises[0]) : state.activeSession?.workoutName || 'Session'; renderSession(); }
   if(currentView==='create'){ titleEl.textContent = currentParams.workoutId ? 'Edit Workout' : 'Create Workout'; renderCreate(currentParams.workoutId); }
   if(currentView==='measure'){ titleEl.textContent='Measurements'; renderMeasure(); }
   if(currentView==='progress'){ titleEl.textContent='Progression'; renderProgress(); }
@@ -510,7 +513,11 @@ function renderHome(){
     </button>
     ${state.activeSession?.kind==='exercise' ? `<button type="button" class="tile c-red" id="t-resume-exercise">
       <div class="t-bar"></div><div class="t-label">Resume Exercise</div>
-      <div class="t-sub">${esc(state.activeSession.exercises[0].name)} · saved in progress</div>
+      <div class="t-sub">${esc(exerciseName(state.activeSession.exercises[0]))} · saved in progress</div>
+    </button>` : ''}
+    ${state.activeSession && state.activeSession.kind!=='exercise' ? `<button type="button" class="tile c-red" id="t-resume-session">
+      <div class="t-bar"></div><div class="t-label">Resume Workout</div>
+      <div class="t-sub">${esc(state.activeSession.workoutName)} · saved in progress</div>
     </button>` : ''}
     <button type="button" class="tile c-green" id="t-measure">
       <div class="t-bar"></div>
@@ -533,6 +540,8 @@ function renderHome(){
   document.getElementById('t-exercises').onclick = ()=>navigate('exercises');
   const resume = document.getElementById('t-resume-exercise');
   if(resume) resume.onclick = ()=>navigate('session');
+  const resumeSession = document.getElementById('t-resume-session');
+  if(resumeSession) resumeSession.onclick = ()=>navigate('session');
   document.getElementById('t-measure').onclick = ()=>navigate('measure');
   document.getElementById('t-progress').onclick = ()=>navigate('progress');
   document.getElementById('t-backup').onclick = ()=>navigate('backup');
@@ -581,9 +590,11 @@ function renderWorkoutsList(){
       e.stopPropagation();
       const id = btn.dataset.del;
       const w = state.workouts.find(x=>x.id===id);
+      if(state.activeSession?.kind!=='exercise' && state.activeSession?.workoutId===id){
+        toast('Finish the active workout before deleting its template'); return;
+      }
       if(confirm(`Delete "${w.name}"? This won't delete past logged sessions.`)){
         state.workouts = state.workouts.filter(x=>x.id!==id);
-        if(state.activeSession && state.activeSession.kind!=='exercise' && state.activeSession.workoutId===id) state.activeSession=null;
         if(!saveState()) return; renderWorkoutsList();
       }
     });
@@ -616,7 +627,7 @@ function startOrResumeWorkout(workoutId){
   state.activeSession = {
     id: uid(), workoutId: w.id, workoutName: w.name, date: new Date().toISOString(),
     exercises: w.exercises.map(ex=>({
-      exerciseId: ex.id, catalogId: exerciseCatalogId(ex), name: ex.name, notes:'', weight: ex.weight, reps: ex.reps,
+      exerciseId: ex.id, catalogId: exerciseCatalogId(ex), name: exerciseName(ex), notes:'', weight: ex.weight, reps: ex.reps,
       startWeight: ex.weight, startReps: ex.reps,
       sets: [], finished:false
     }))
@@ -655,7 +666,7 @@ function renderSession(startIndex){
         <button class="nav-arrow" id="sessNext" aria-label="Next exercise">›</button>
       </div>
     </div>
-    ${sess.kind==='exercise' ? '' : `<button class="btn ${allFinished?'positive':'ghost'}" id="sessFinishBottom" style="margin-top:4px;">${allFinished?'✓ Finish Workout':'Finish Workout'}</button>`}
+    ${sess.kind==='exercise' ? '<button type="button" class="text-btn" id="ex-rename" style="width:100%;">Rename Exercise</button>' : `<button class="btn ${allFinished?'positive':'ghost'}" id="sessFinishBottom" style="margin-top:4px;">${allFinished?'✓ Finish Workout':'Finish Workout'}</button>`}
   `;
   const updateCounter = (i)=>{
     const c = document.getElementById('sessCounter');
@@ -674,6 +685,8 @@ function renderSession(startIndex){
   document.getElementById('sessNext').onclick = ()=>sessionCarousel.next();
   const finish = document.getElementById('sessFinishBottom');
   if(finish) finish.onclick = finishWorkout;
+  const rename = document.getElementById('ex-rename');
+  if(rename) rename.onclick = ()=>openExerciseNameModal(sess.exercises[0].catalogId);
 
   wireExerciseCards();
   if(sess.kind==='exercise' && sess.editSetDraft){
@@ -718,11 +731,11 @@ function renderExerciseCardHTML(ex, idx, byRecency){
   return `
   <div class="card-slide">
     <div class="ex-card ${ex.finished?'finished':''}" data-idx="${idx}">
-      <div class="ex-name">${esc(ex.name)}</div>
+      <div class="ex-name">${esc(exerciseName(ex))}</div>
       ${lastTime}
       ${repHintHtml}
       <div class="field" style="margin-bottom:14px;">
-        <textarea data-role="notes" data-idx="${idx}" aria-label="Notes for ${esc(ex.name)}" placeholder="Notes (form cues, how it felt...)" ${ex.finished?'disabled':''}>${esc(ex.notes)}</textarea>
+        <textarea data-role="notes" data-idx="${idx}" aria-label="Notes for ${esc(exerciseName(ex))}" placeholder="Notes (form cues, how it felt...)" ${ex.finished?'disabled':''}>${esc(ex.notes)}</textarea>
       </div>
       <div class="stepper-label">Weight (kg)</div>
       <div class="stepper-row">
@@ -810,7 +823,7 @@ function syncWorkoutDefaultsIfFinished(exIdx){
   const last = ex.sets[ex.sets.length-1] || {weight:ex.startWeight, reps:ex.startReps};
   const w = state.workouts.find(w=>w.id===state.activeSession.workoutId);
   if(w){
-    const wex = w.exercises.find(e=>e.id===ex.exerciseId);
+    const wex = w.exercises.find(e=>e.id===ex.exerciseId && e.catalogId===ex.catalogId);
     if(wex){ wex.weight = last.weight; wex.reps = last.reps; }
   }
 }
@@ -823,7 +836,7 @@ function openEditSetModal(exIdx, setIdx){
   if(!s) return;
   showModal(`
     <div class="eyebrow">Edit Set</div>
-    <div class="h2" style="margin-bottom:16px;">${esc(ex.name)}</div>
+    <div class="h2" style="margin-bottom:16px;">${esc(exerciseName(ex))}</div>
     <div class="grid2">
       <div class="field">
         <label for="modal-set-weight">Weight (kg)</label>
@@ -930,11 +943,11 @@ function onExerciseAction(act, idx){
   if(act==='finishex'){
     ex.finished = true;
     syncWorkoutDefaultsIfFinished(idx);
-    message = `${ex.name} finished`;
+    message = `${exerciseName(ex)} finished`;
   }
   if(act==='reopenex'){
     ex.finished = false;
-    message = `${ex.name} reopened`;
+    message = `${exerciseName(ex)} reopened`;
   }
   const restoreFocus = (action)=>{
     const button = [...document.querySelectorAll('#view-session [data-act]')]
@@ -1044,30 +1057,18 @@ let draftDeck = [];
 let keepName = '';
 let editingWorkoutId = null;
 
-// A catalog identity is separate from a template card's id/session exerciseId.
-// Legacy records have no persistent identity. Preserve their existing name groups
-// verbatim (including all sets), without retroactively asserting shared identity.
+// The library owns current names. Card/session names remain historical snapshots.
 function exerciseCatalogId(ex){
-  return ex.catalogId || 'legacy-name:'+JSON.stringify(ex.name.trim().toLowerCase());
+  return ex.catalogId;
 }
-function getKnownExercises(){
-  const known = new Map();
-  const add = (ex, source)=>{
-    if(!ex.name.trim()) return;
-    const id = exerciseCatalogId(ex);
-    if(!known.has(id)) known.set(id, {id, name:ex.name, source});
-  };
-  if(state.activeSession) state.activeSession.exercises.forEach(ex=>add(ex, state.activeSession.workoutName));
-  [...state.sessions].sort((a,b)=>new Date(b.date)-new Date(a.date))
-    .forEach(s=>s.exercises.forEach(ex=>add(ex, s.workoutName)));
-  state.workouts.forEach(w=>w.exercises.forEach(ex=>add(ex, w.name)));
-  return [...known.values()];
+function exerciseName(ex){
+  return state.exercises.find(entry=>entry.id===ex.catalogId)?.name || ex.name;
 }
 function hasLegacyExerciseHistory(){
-  return state.sessions.some(s=>s.exercises.some(ex=>!ex.catalogId));
+  return state.exercises.some(ex=>ex.legacy);
 }
 function legacyHistoryNotice(){
-  return hasLegacyExerciseHistory() ? `<p class="muted history-notice">Older history is grouped by name as before. Identical names may have meant different exercises; those records have not been relinked or changed.</p>` : '';
+  return hasLegacyExerciseHistory() ? `<p class="muted history-notice">Older history keeps its previous name groups. Identical names may have meant different exercises; original names and logged sets are preserved.</p>` : '';
 }
 function getLastSetForExercise(id){
   let last = null, lastTime = -Infinity;
@@ -1084,41 +1085,55 @@ function getLastSetForExercise(id){
 }
 function getRecentDefaultsForExercise(id){
   const last = getLastSetForExercise(id);
-  if(last) return {weight:last.weight, reps:last.reps};
-  for(const w of state.workouts){
-    const ex = w.exercises.find(ex=>exerciseCatalogId(ex)===id);
-    if(ex) return {weight:ex.weight, reps:ex.reps};
-  }
-  return {weight:20, reps:8};
-}
-function exerciseSourceLabel(ex, known){
-  if(known.filter(other=>other.name.trim().toLowerCase()===ex.name.trim().toLowerCase()).length<2) return '';
-  // Separate same-name IDs remain selectable, including after category imports.
-  const peers = known.filter(other=>other.name.trim().toLowerCase()===ex.name.trim().toLowerCase());
-  return ` · ${ex.source} · history ${peers.findIndex(other=>other.id===ex.id)+1}`;
+  return last ? {weight:last.weight, reps:last.reps} : {weight:20, reps:8};
 }
 function renderExercisesLibrary(){
   const el = document.getElementById('view-exercises');
-  const known = getKnownExercises();
-  if(!known.length){
-    el.innerHTML = `<div class="empty-state"><div class="ee">🏋️</div><div class="el">No exercises yet</div><div>Exercises from your workouts and history appear here.</div></div>`;
-    return;
-  }
-  el.innerHTML = legacyHistoryNotice()+`<div class="exercise-library">${known.map(ex=>{
+  el.innerHTML = `<button type="button" class="btn ghost" id="ex-add" style="margin-bottom:16px;">+ Add Exercise</button>`+legacyHistoryNotice()+
+    (state.exercises.length ? `<div class="exercise-library">${state.exercises.map(ex=>{
     const last = getLastSetForExercise(ex.id);
     const resume = state.activeSession?.kind==='exercise' && exerciseCatalogId(state.activeSession.exercises[0])===ex.id;
-    return `<button type="button" class="tile exercise-library-card" data-catalog-id="${esc(ex.id)}">
+    return `<div class="exercise-library-item"><button type="button" class="tile exercise-library-card" data-catalog-id="${esc(ex.id)}">
       <div class="t-label">${esc(ex.name)}</div>
-      <div class="t-sub">${last ? `${last.weight} kg × ${last.reps} reps` : 'No logged sets'}${esc(exerciseSourceLabel(ex, known))}</div>
+      <div class="t-sub">${last ? `${last.weight} kg × ${last.reps} reps` : 'No logged sets'}</div>
       ${resume ? '<div class="t-sub">Resume · saved in progress</div>' : ''}
-    </button>`;
-  }).join('')}</div>`;
+    </button><button type="button" class="text-btn" data-rename-id="${esc(ex.id)}" aria-label="Rename ${esc(ex.name)}">Rename</button></div>`;
+  }).join('')}</div>` : `<div class="empty-state"><div class="ee">🏋️</div><div class="el">No exercises yet</div><div>Add an exercise here or when creating a workout.</div></div>`);
+  document.getElementById('ex-add').onclick = ()=>openExerciseNameModal();
   el.querySelectorAll('[data-catalog-id]').forEach(button=>{
     button.onclick = ()=>startLibraryExercise(button.dataset.catalogId);
   });
+  el.querySelectorAll('[data-rename-id]').forEach(button=>{
+    button.onclick = ()=>openExerciseNameModal(button.dataset.renameId);
+  });
+}
+function openExerciseNameModal(id=null){
+  const entry = id ? state.exercises.find(ex=>ex.id===id) : null;
+  const newId = id || 'exercise:'+uid();
+  showModal(`
+    <div class="h2" style="margin-bottom:16px;">${id ? 'Rename' : 'Add'} Exercise</div>
+    <div class="field"><label for="exercise-name">Exercise name</label>
+      <input type="text" id="exercise-name" value="${esc(entry?.name || '')}" autocomplete="off"></div>
+    <p class="muted" id="exercise-error" role="alert"></p>
+    <button type="button" class="btn primary" id="exercise-save">${id ? 'Save Name' : 'Add Exercise'}</button>
+    <button type="button" class="btn ghost" id="exercise-cancel" style="margin-top:10px;">Cancel</button>
+  `);
+  document.getElementById('exercise-save').onclick = ()=>{
+    const name = document.getElementById('exercise-name').value.trim();
+    try{
+      const exercises = id ? state.exercises.map(ex=>ex.id===id ? {...ex, name} : ex)
+        : state.exercises.concat({id:newId, name});
+      state.exercises = normalizeExerciseLibrary(exercises);
+    }catch(error){ document.getElementById('exercise-error').textContent = error.message; return; }
+    if(!saveState()) return;
+    hideModal();
+    render();
+    toast(id ? 'Exercise renamed' : 'Exercise added');
+  };
+  document.getElementById('exercise-cancel').onclick = hideModal;
 }
 function startLibraryExercise(id){
-  const known = getKnownExercises().find(ex=>ex.id===id);
+  const known = state.exercises.find(ex=>ex.id===id);
   if(!known) return;
   if(state.activeSession?.kind==='exercise' && exerciseCatalogId(state.activeSession.exercises[0])===id){
     navigate('session'); return;
@@ -1151,18 +1166,15 @@ function renderExerciseSuggestions(query, box, inputEl){
   selectedCatalogId = null;
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; return; }
-  const known = getKnownExercises();
+  const known = state.exercises;
   const matches = known.filter(ex=>ex.name.toLowerCase().includes(q)).slice(0,6);
-  box.innerHTML = matches.map(ex=>`<button type="button" class="suggest-item" data-catalog-id="${esc(ex.id)}">${esc(ex.name)}${esc(exerciseSourceLabel(ex, known))}</button>`).join('');
+  box.innerHTML = matches.map(ex=>`<button type="button" class="suggest-item" data-catalog-id="${esc(ex.id)}">${esc(ex.name)}</button>`).join('');
   box.querySelectorAll('.suggest-item').forEach((btn,i)=>{
     btn.addEventListener('click', ()=>{
       const ex = matches[i];
       inputEl.value = ex.name;
       selectedCatalogId = ex.id;
       box.innerHTML = '';
-      const defaults = getRecentDefaultsForExercise(ex.id);
-      document.getElementById('cw-exweight').value = defaults.weight;
-      document.getElementById('cw-exreps').value = defaults.reps;
       inputEl.focus();
     });
   });
@@ -1190,15 +1202,15 @@ function paintCreate(){
   let deckHtml = draftDeck.map((ex,i)=>`
     <div class="deck-item">
       <div class="deck-move">
-        <button type="button" class="deck-move-btn" data-move="up:${i}" aria-label="Move ${esc(ex.name)} up" ${i===0?'disabled':''}>▲</button>
+        <button type="button" class="deck-move-btn" data-move="up:${i}" aria-label="Move ${esc(exerciseName(ex))} up" ${i===0?'disabled':''}>▲</button>
         <span class="deck-num">${i+1}</span>
-        <button type="button" class="deck-move-btn" data-move="down:${i}" aria-label="Move ${esc(ex.name)} down" ${i===draftDeck.length-1?'disabled':''}>▼</button>
+        <button type="button" class="deck-move-btn" data-move="down:${i}" aria-label="Move ${esc(exerciseName(ex))} down" ${i===draftDeck.length-1?'disabled':''}>▼</button>
       </div>
       <div class="deck-info">
-        <div class="di-name">${esc(ex.name)}</div>
+        <div class="di-name">${esc(exerciseName(ex))}</div>
         <div class="di-sub">start ${ex.weight}kg × ${ex.reps}</div>
       </div>
-      <button class="li-del" data-rm="${i}" aria-label="Remove ${esc(ex.name)}">✕</button>
+      <button class="li-del" data-rm="${i}" aria-label="Remove ${esc(exerciseName(ex))}">✕</button>
     </div>`).join('');
   el.innerHTML = `
     <div class="field">
@@ -1235,12 +1247,11 @@ function paintCreate(){
     const reps = readNonnegativeInput(document.getElementById('cw-exreps'), true);
     if(!name){ toast('Give the exercise a name'); return; }
     if(weight===null || reps===null){ toast('Enter a non-negative weight and whole rep count'); return; }
-    const matches = [...getKnownExercises(), ...draftDeck.map(ex=>({id:exerciseCatalogId(ex), name:ex.name}))]
-      .filter(ex=>ex.name.trim().toLowerCase()===name.toLowerCase());
-    const ids = [...new Set(matches.map(ex=>ex.id))];
-    if(!selectedCatalogId && ids.length>1){ toast('Choose an exercise suggestion to keep its history separate'); return; }
-    const catalogId = selectedCatalogId || ids[0] || 'exercise:'+uid();
-    draftDeck.push({id:uid(), catalogId, name, weight, reps});
+    const existing = state.exercises.find(ex=>nameKey(ex.name)===nameKey(name))
+      || draftDeck.find(ex=>nameKey(exerciseName(ex))===nameKey(name));
+    const catalogId = selectedCatalogId || existing?.catalogId || existing?.id || 'exercise:'+uid();
+    const definition = state.exercises.find(ex=>ex.id===catalogId);
+    draftDeck.push({id:uid(), catalogId, name:definition?.name || (existing ? exerciseName(existing) : name), weight, reps});
     selectedCatalogId = null;
     paintCreate();
   };
@@ -1270,6 +1281,13 @@ function paintCreate(){
     if(!name){ toast('Name your workout first'); return; }
     if(draftDeck.length===0){ toast('Add at least one exercise'); return; }
     const exercises = draftDeck.map(x=>({...x, id:x.id||uid(), notes:x.notes || ''}));
+    // New exercises belong to the draft until the workout and definitions save together.
+    const definitions = new Map(state.exercises.map(ex=>[ex.id, ex]));
+    exercises.forEach(ex=>{
+      if(!definitions.has(ex.catalogId)) definitions.set(ex.catalogId, {id:ex.catalogId, name:ex.name});
+    });
+    try{ state.exercises = normalizeExerciseLibrary([...definitions.values()]); }
+    catch(error){ toast(error.message); return; }
     if(editingWorkoutId){
       const w = state.workouts.find(x=>x.id===editingWorkoutId);
       if(w){ w.name = name; w.exercises = exercises; }
@@ -1400,19 +1418,14 @@ function est1RM(weight, reps){
 
 function paintWorkoutProgress(){
   const body = document.getElementById('prog-body');
-  // Persistent identities share history across templates and individual logs.
-  // The resolver retains the old name groups only for unidentified legacy data.
+  // History records keep their snapshots; the library supplies current labels.
   const groups = Object.create(null);
   const sortedSessions = [...state.sessions].sort((a,b)=> new Date(a.date) - new Date(b.date));
   sortedSessions.forEach(sess=>{
     sess.exercises.forEach(ex=>{
-      if(ex.sets.length===0 || !ex.name.trim()) return;
+      if(ex.sets.length===0) return;
       const key = exerciseCatalogId(ex);
-      if(!groups[key]) groups[key] = { name: ex.name, workoutName: sess.workoutName, points: [] };
-      // Sessions are processed oldest-first, so re-assigning the label on every
-      // match means it ends up reflecting the most recently logged name/workout,
-      // rather than staying stuck on whatever the very first session called it.
-      groups[key].name = ex.name;
+      if(!groups[key]) groups[key] = { name: exerciseName(ex), workoutName: sess.workoutName, points: [] };
       groups[key].workoutName = sess.workoutName;
       const best = ex.sets.reduce((m,s)=>{
         const e1 = est1RM(s.weight, s.reps);
@@ -1709,17 +1722,17 @@ async function readJSONFile(file){
 /* ---- Export: one category per file ---- */
 function exportWorkouts(){
   downloadJSON(`racked-workouts-${todayISODate()}.json`,
-    { type:'racked-workouts', version:1, exportedAt:new Date().toISOString(), workouts: state.workouts });
+    { type:'racked-workouts', version:2, exportedAt:new Date().toISOString(), exercises:referencedExercises(state.workouts), workouts: state.workouts });
   toast('Workouts exported');
 }
 function exportSessions(){
   downloadJSON(`racked-workout-progression-${todayISODate()}.json`,
-    { type:'racked-sessions', version:1, exportedAt:new Date().toISOString(), sessions: state.sessions });
+    { type:'racked-sessions', version:2, exportedAt:new Date().toISOString(), exercises:referencedExercises(state.sessions), sessions: state.sessions });
   toast('Workout progression exported');
 }
 function exportMeasurements(){
   downloadJSON(`racked-size-progression-${todayISODate()}.json`,
-    { type:'racked-measurements', version:1, exportedAt:new Date().toISOString(), measurements: state.measurements });
+    { type:'racked-measurements', version:2, exportedAt:new Date().toISOString(), measurements: state.measurements });
   toast('Measurements exported');
 }
 function exportFullBackup(){
@@ -1839,42 +1852,132 @@ function normalizeMeasurements(arr){
     return {...m, id:idValue(m.id), date:dateValue(m.date,todayISODate()), part:textValue(m.part,'Measurement'), value:numericValue(m.value)};
   });
 }
+function nameKey(name){ return name.trim().toLowerCase(); }
+function normalizeExerciseLibrary(arr){
+  const ids = new Set(), names = new Set();
+  return recordArray(arr).map(record=>{
+    const ex = requireRecord(record);
+    if(typeof ex.id!=='string' || !ex.id.trim()) throw new Error('Exercise library ID is missing or invalid');
+    if(typeof ex.name!=='string' || !ex.name.trim()) throw new Error('Exercise name is required');
+    const name = ex.name.trim(), key = nameKey(name);
+    if(ids.has(ex.id)) throw new Error('Duplicate exercise library ID: '+ex.id);
+    if(names.has(key)) throw new Error('An exercise named "'+name+'" already exists; different identities cannot share a name');
+    ids.add(ex.id); names.add(key);
+    return {...ex, name};
+  });
+}
+function exerciseRecords(data){
+  return [...(data.workouts || []), ...(data.sessions || []), ...(data.activeSession ? [data.activeSession] : [])]
+    .flatMap(record=>record.exercises);
+}
+function referencedExercises(collection){
+  const ids = new Set(collection.flatMap(record=>record.exercises.map(ex=>ex.catalogId)));
+  return state.exercises.filter(ex=>ids.has(ex.id));
+}
+// Compatibility is confined to loading/import. Normal application records always
+// reference the central library; historical names remain unchanged snapshots.
+function connectExerciseLibrary(records, definitions, legacy){
+  const library = normalizeExerciseLibrary(definitions);
+  const byId = new Map(library.map(ex=>[ex.id,ex]));
+  const authoritative = new Set(byId.keys());
+  for(const ex of records){
+    if(!ex.catalogId){
+      if(!legacy) throw new Error('Exercise is missing its library reference');
+      if(!ex.name.trim()) throw new Error('Cannot identify an unnamed legacy exercise');
+      ex.catalogId = 'legacy-name:'+JSON.stringify(nameKey(ex.name));
+    }
+    const found = byId.get(ex.catalogId);
+    if(found){
+      if(!authoritative.has(found.id) && nameKey(found.name)!==nameKey(ex.name)){
+        throw new Error('Exercise ID '+found.id+' has conflicting names; its historical identity is ambiguous');
+      }
+    } else {
+      if(!legacy) throw new Error('Unknown exercise library reference: '+ex.catalogId);
+      const entry = {id:ex.catalogId, name:ex.name.trim()};
+      if(entry.id.startsWith('legacy-name:')) entry.legacy = true;
+      library.push(entry); byId.set(entry.id,entry);
+    }
+  }
+  return normalizeExerciseLibrary(library);
+}
+function backupVersion(parsed){
+  const version = parsed.version===undefined ? 1 : parsed.version;
+  if(version!==1 && version!==2) throw new Error('Unsupported backup version');
+  return version;
+}
+function validateLegacyNames(collection){
+  for(const record of collection){
+    for(const ex of recordArray(record.exercises)){
+      if(!ex.catalogId && (typeof ex.name!=='string' || !ex.name.trim())){
+        throw new Error('Cannot identify an unnamed legacy exercise; give it a name in the source before restoring');
+      }
+    }
+  }
+}
 function normalizeState(value){
-  const parsed = requireRecord(value);
-  if(parsed.version!==undefined && parsed.version!==1) throw new Error('Unsupported backup version');
+  const parsed = requireRecord(value), version = backupVersion(parsed);
   if(!Array.isArray(parsed.workouts) || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.measurements)) throw new Error('Incomplete full backup');
-  return {...parsed, version:1, workouts:normalizeWorkouts(parsed.workouts), sessions:normalizeSessions(parsed.sessions),
+  if(version===2 && !Array.isArray(parsed.exercises)) throw new Error('Missing exercise library');
+  const next = {...parsed, version:2, workouts:normalizeWorkouts(parsed.workouts), sessions:normalizeSessions(parsed.sessions),
     measurements:normalizeMeasurements(parsed.measurements),
     activeSession:parsed.activeSession==null ? null : normalizeSessions([requireRecord(parsed.activeSession)])[0]};
+  if(version===1) validateLegacyNames([...parsed.workouts, ...parsed.sessions, ...(parsed.activeSession ? [parsed.activeSession] : [])]);
+  next.exercises = connectExerciseLibrary(exerciseRecords(next), parsed.exercises===undefined ? [] : parsed.exercises, version===1);
+  return next;
+}
+function mergeExerciseDefinitions(existing, incoming){
+  const merged = existing.map(ex=>({...ex}));
+  for(const definition of incoming){
+    const found = merged.find(ex=>ex.id===definition.id);
+    if(found){
+      if(nameKey(found.name)!==nameKey(definition.name)) throw new Error('Exercise ID '+found.id+' has a conflicting library name; existing data was kept');
+    } else merged.push(definition);
+  }
+  return normalizeExerciseLibrary(merged);
 }
 
-/* Category imports replace only their own collection, after full validation. */
+/* Category imports replace only their collection and add required definitions.
+   Build the entire candidate first; retained history and active references must
+   still resolve, even when their original workout template no longer exists. */
 async function importCategory(e, category, normalize, confirmMessage, successMessage, errorMessage){
   const file = e.target.files[0]; if(!file) return;
   try{
-    const parsed = requireRecord(await readJSONFile(file));
-    if(parsed.version!==undefined && parsed.version!==1) throw new Error('Unsupported backup version');
+    const parsed = requireRecord(await readJSONFile(file)), version = backupVersion(parsed);
     if(!Array.isArray(parsed[category])) throw new Error('Missing category');
     const incoming = normalize(parsed[category]);
+    let definitions = state.exercises;
+    if(category!=='measurements'){
+      const records = incoming.flatMap(record=>record.exercises);
+      if(version===2){
+        if(!Array.isArray(parsed.exercises)) throw new Error('Missing exercise library definitions');
+        const supplied = connectExerciseLibrary(records, parsed.exercises, false);
+        definitions = mergeExerciseDefinitions(definitions, supplied);
+      } else {
+        validateLegacyNames(parsed[category]);
+        if(parsed.exercises!==undefined) definitions = mergeExerciseDefinitions(definitions, normalizeExerciseLibrary(parsed.exercises));
+        definitions = connectExerciseLibrary(records, definitions, true);
+      }
+    }
+    const next = normalizeState({...state, [category]:incoming, exercises:definitions});
     if(!confirm(confirmMessage(state[category].length,incoming.length))) return;
-    state = {...state, [category]:incoming};
+    state = next;
     if(!saveState()) return;
     toast(successMessage);
     renderBackup();
   }catch(err){
-    alert(errorMessage);
+    alert(errorMessage+' '+err.message+'. No data was replaced.');
   }finally{
     e.target.value = '';
   }
 }
 function importWorkoutsFile(e){
   return importCategory(e,'workouts',normalizeWorkouts,
-    (current,incoming)=>`Replace your current ${current} workouts with the ${incoming} workouts in this file? Session history and measurements are not affected.`,
+    (current,incoming)=>`Replace your current ${current} workouts with the ${incoming} workouts in this file? Required exercise definitions are added; session history and measurements are not affected.`,
     'Workouts imported',"That file doesn't look like a valid Racked workouts export.");
 }
 function importSessionsFile(e){
   return importCategory(e,'sessions',normalizeSessions,
-    (current,incoming)=>`Replace your current ${current} logged sessions with the ${incoming} sessions in this file? Workouts and measurements are not affected.`,
+    (current,incoming)=>`Replace your current ${current} logged sessions with the ${incoming} sessions in this file? Required exercise definitions are added; workouts and measurements are not affected.`,
     'Workout progression imported',"That file doesn't look like a valid Racked workout progression export.");
 }
 function importMeasurementsFile(e){
@@ -1886,14 +1989,14 @@ async function importFullBackup(e){
   const file = e.target.files[0]; if(!file) return;
   try{
     const next = normalizeState(await readJSONFile(file));
-    if(!confirm('Replace ALL current data (workouts, sessions, measurements) with this backup?')) return;
+    if(!confirm('Replace ALL current data (exercise library, workouts, sessions, measurements and active session) with this backup?')) return;
     state = next;
     if(!saveState({allowRecovery:true})) return;
     toast('Full backup restored');
     navigate('home', {}, false);
     history.replaceState({view:'home',params:{}}, '', '#home');
   }catch(err){
-    alert('That file could not be read as a valid Racked full backup.');
+    alert('That file could not be restored: '+err.message+'. No data was replaced.');
   }finally{
     e.target.value = '';
   }
@@ -1905,7 +2008,7 @@ function copySummary(){
   lines.push('');
   lines.push('## Workouts');
   state.workouts.forEach(w=>{
-    lines.push(`- ${w.name}: ${w.exercises.map(e=>e.name).join(', ')}`);
+    lines.push(`- ${w.name}: ${w.exercises.map(e=>exerciseName(e)).join(', ')}`);
   });
   lines.push('');
   lines.push('## Recent sessions (top set per exercise)');

@@ -192,7 +192,7 @@ test('invalid stored data is preserved, exported byte-for-byte and recoverable',
   assert.equal(await readFile(await download.path(),'utf8'),raw);
   await importFile(page,'#bk-file-full',blank());
   await page.locator('#t-create').waitFor();
-  assert.deepEqual(await saved(page),blank());
+  assert.deepEqual(await saved(page),{...blank(),version:2,exercises:[]});
 });
 
 test('browser PWA install, HTTP-error fallback and offline query navigation',async t=>{
@@ -325,14 +325,21 @@ test('keyboard focus stays on session actions through repeated activation',async
 test('full and category exports download valid data without changing saved state',async t=>{
   const data={...blank(),workouts:[workout()]};
   const page=await open(t,data);
+  const catalogId='legacy-name:'+JSON.stringify('squat');
+  const expected={...data,version:2,exercises:[{id:catalogId,name:'Squat',legacy:true}],
+    workouts:data.workouts.map(w=>({...w,exercises:w.exercises.map(ex=>({...ex,catalogId}))}))};
   await page.locator('#t-backup').click();
   for(const [button,category] of [['#bk-export-workouts','workouts'],['#bk-export-sessions','sessions'],['#bk-export-measurements','measurements'],['#bk-export-full',null]]){
     const event=page.waitForEvent('download');
     await page.locator(button).click();
     const download=await event;
     const json=JSON.parse(await readFile(await download.path(),'utf8'));
-    if(category) assert.deepEqual(json[category],data[category]);
-    else assert.deepEqual(json,data);
+    assert.equal(json.version,2);
+    if(category){
+      assert.deepEqual(json[category],expected[category]);
+      if(category==='workouts') assert.deepEqual(json.exercises,expected.exercises);
+      if(category==='sessions') assert.deepEqual(json.exercises,[]);
+    } else assert.deepEqual(json,expected);
   }
   assert.deepEqual(await saved(page),data);
 });

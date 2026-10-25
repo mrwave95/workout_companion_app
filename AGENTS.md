@@ -14,18 +14,23 @@
 
 ## Data integrity
 
-- `catalogId` is persistent exercise identity; template `id` and session
-  `exerciseId` are card-instance references. Use `exerciseCatalogId()` consistently
-  for library/defaults/hints/charts. Never merge different explicit IDs by name.
-  Unidentified legacy records retain the documented name groups without rewriting
-  historical IDs/sets. This grouping cannot prove historical exercise identity.
-- Individual logging uses `activeSession.kind === 'exercise'` and normal session
-  history, never a saved template. Preserve `draftInputs` and `editSetDraft` through
-  restarts/backups; finishing atomically archives once and clears the active record.
-
-- Preserve `racked_state_v1` and its version-1 JSON compatibility: `workouts`,
-  `sessions`, `measurements`, and nullable `activeSession`. Keep IDs, notes,
-  active-session controls, and unknown metadata when editing or round-tripping.
+- `state.exercises` owns persistent exercise IDs/current names. `catalogId` is the
+  sole reference; template `id` and session `exerciseId` remain card-instance IDs.
+  Names are unique via trim/lowercase. Rename only the central name; preserve
+  historical name snapshots. Never merge different IDs by name or delete unused
+  library entries when templates/categories are removed.
+- Format v2 remains under `racked_state_v1`; load/import accepts v1 and converts
+  unambiguous legacy name groups once, with additive references. Keep compatibility
+  ID derivation inside validation/import, never in runtime history lookup. Reject
+  conflicting names/identities or incomplete v2 references without replacing data.
+- Individual logging uses `activeSession.kind === 'exercise'` and normal history,
+  never a saved template. Preserve `draftInputs`, `editSetDraft`, notes, controls,
+  IDs, timestamps and unknown metadata through conversion, restarts and backups.
+  Finishing atomically archives once and clears the active record.
+- Full backups include library-only exercises; category exports include referenced
+  definitions. Category imports add definitions and replace only their collection,
+  preserving retained history/active references. Workout starting values stay local
+  to each template. Stage new definitions until the workout saves successfully.
 - Validate imports before confirmation/replacement. Category imports affect only
   their category; full backups require all three collections. Do not introduce
   destructive migrations or silently normalize invalid saved data into deletion.
@@ -64,9 +69,9 @@
 - Test tooling: Node.js 20+, `npm ci`, `npx playwright install chromium`, then
   `npm test`. `CHROMIUM_PATH` selects a browser; `/usr/bin/chromium` is reused
   when available. A restricted home cache can use `--cache /tmp/racked-npm-cache`.
-- Unit checks: `node --test tests/data.test.cjs tests/sw.test.cjs`.
+- Unit checks: `node --test tests/data.test.cjs tests/library-data.test.cjs tests/sw.test.cjs`.
 - Optional second engine: `npx playwright install webkit`, then
-  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs`.
+  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs tests/library.test.cjs`.
 - Run relevant checks after edits, the full suite before review, and
   `git diff --check`. Report failures, skips and unverified browsers honestly.
 

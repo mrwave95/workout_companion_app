@@ -15,11 +15,11 @@ function session(id,exercise,{workoutId='w',date='2026-10-24T12:00:00Z',sets=[{w
     sets,finished:true
   }]};
 }
-async function open(t,state=blank()){
+async function open(t,state=blank(),dialogs=[]){
   const context = await app.context(t);
   await seedState(context,state);
   const page = await context.newPage();
-  page.on('dialog',dialog=>dialog.type()==='confirm' ? dialog.accept() : dialog.dismiss());
+  page.on('dialog',dialog=>{dialogs.push(dialog.message()); return dialog.type()==='confirm' ? dialog.accept() : dialog.dismiss();});
   await page.goto(app.origin);
   return page;
 }
@@ -51,7 +51,7 @@ test('exercise selection uses a two-column library and the last logged set, not 
   assert.equal(await page.locator('#t-create + #t-exercises').count(),1);
   await library(page);
   assert.equal(await page.locator('.exercise-library-card').count(),2);
-  assert.equal(await libraryCard(page,bench.catalogId).evaluate(el=>getComputedStyle(el.parentElement).gridTemplateColumns.split(' ').length),2);
+  assert.equal(await page.locator('.exercise-library').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),2);
   assert.match(await libraryCard(page,bench.catalogId).innerText(),/60\s*kg\s*×\s*8\s*reps/i);
   assert.match(await libraryCard(page,incline.catalogId).innerText(),/no logged sets/i);
   await libraryCard(page,bench.catalogId).click();
@@ -179,7 +179,7 @@ test('partial invalid drafts survive reopening and cannot log stale values or fi
   await page.locator('[data-role="reps"]').fill('9');
   await page.locator('[data-act="logset"]').click();
   assert.deepEqual((await saved(page)).activeSession.exercises[0].sets.map(({weight,reps})=>({weight,reps})),[
-    {weight:50,reps:8},{weight:22.5,reps:9}
+    {weight:20,reps:8},{weight:22.5,reps:9}
   ]);
 });
 
@@ -200,7 +200,7 @@ test('an unfinished set edit resumes after reload and applies to exactly one exi
   await page.locator('#t-resume-exercise').click();
   assert.equal(await page.locator('#modal-set-weight').inputValue(),'67,5');
   assert.equal(await page.locator('#modal-set-reps').inputValue(),'10');
-  assert.equal((await saved(page)).activeSession.exercises[0].sets[0].weight,50);
+  assert.equal((await saved(page)).activeSession.exercises[0].sets[0].weight,20);
   await page.locator('#modal-set-save').click();
   const sets=(await saved(page)).activeSession.exercises[0].sets;
   assert.equal(sets.length,1);
@@ -253,15 +253,11 @@ test('cancelling a switch to another exercise or workout keeps the unfinished ex
   assert.equal(await page.locator('.set-chip').count(),1);
 });
 
-test('creating workout cards reuses selected identities and never guesses between same-name identities',async t=>{
-  const other={...bench,id:'other-card',catalogId:'exercise:other-bench'};
+test('creating workout cards reuses selected identities and new draft cards share one stable identity',async t=>{
+  const other={...bench,id:'other-card',catalogId:'exercise:other-bench',name:'Dumbbell Bench Press'};
   const page=await open(t,{...blank(),workouts:[deck('one',[bench]),deck('two',[other])]});
   await page.locator('#t-create').click();
   await page.locator('#cw-name').fill('Shared identity');
-  await page.locator('#cw-exname').fill('Bench Press');
-  await page.locator('#cw-addex').click();
-  assert.equal(await page.locator('.deck-item').count(),0);
-  assert.match(await page.locator('#toast').innerText(),/suggestion/i);
   await page.locator('#cw-exname').fill('Bench');
   await page.locator('.suggest-item[data-catalog-id="exercise:other-bench"]').click();
   await page.locator('#cw-addex').click();
@@ -284,26 +280,22 @@ test('creating workout cards reuses selected identities and never guesses betwee
   assert.notEqual(added[0].catalogId,bench.catalogId);
 });
 
-test('distinct exercise identities remain separate even with identical names',async t=>{
+test('ambiguous same-name identities are rejected without merging or overwriting the original data',async t=>{
   const other={...bench,id:'other-card',catalogId:'exercise:other-bench'};
   const state={...blank(),workouts:[deck('one',[bench]),deck('two',[other])],sessions:[
     session('s1',bench),session('s2',other,{workoutId:'two',sets:[{weight:20,reps:15,time:'2026-10-24T12:01:00Z'}]})
   ]};
-  const page=await open(t,state);
+  const dialogs=[];
+  const page=await open(t,state,dialogs);
+  assert(dialogs.some(message=>/different.*identit.*share.*name/i.test(message)));
+  assert.equal(await page.evaluate(()=>localStorage.getItem('racked_state_v1')),JSON.stringify(state));
   await library(page);
-  assert.equal(await page.locator('.exercise-library-card').count(),2);
-  assert.match(await libraryCard(page,bench.catalogId).innerText(),/60\s*kg\s*×\s*8/);
-  assert.match(await libraryCard(page,other.catalogId).innerText(),/20\s*kg\s*×\s*15/);
-  await libraryCard(page,other.catalogId).click();
-  assert.equal(await page.locator('[data-role="weight"]').inputValue(),'20');
-  await page.locator('[data-act="logset"]').click();
-  await page.locator('[data-act="finishex"]').click();
-  await page.reload();
-  await page.locator('#t-progress').click();
-  assert.equal(await page.locator('.chart-card').count(),2);
-  const subtitles=await page.locator('.cc-sub').allTextContents();
-  assert(subtitles.some(text=>/1 data point/.test(text)));
-  assert(subtitles.some(text=>/2 data points/.test(text)));
+  assert.equal(await page.locator('.exercise-library-card').count(),0);
+  await page.locator('#ex-add').click();
+  await page.locator('#exercise-name').fill('Recovery must not overwrite');
+  await page.locator('#exercise-save').click();
+  assert.equal(await page.evaluate(()=>localStorage.getItem('racked_state_v1')),JSON.stringify(state));
+  assert.equal(await page.locator('#exercise-save').isVisible(),true);
 });
 
 test('one persistent identity shares progression across template instances and individual logging',async t=>{
@@ -346,12 +338,15 @@ test('legacy history keeps original records and its existing name groups while e
   assert.match(await page.locator('#view-exercises').innerText(),/name/i);
   await page.locator('.exercise-library-card').click();
   const next=await saved(page);
-  assert.deepEqual(next.sessions,historical);
-  assert.deepEqual(next.workouts,state.workouts);
+  const catalogId='legacy-name:'+JSON.stringify('bench press');
+  const expectedHistory=historical.map(sess=>({...sess,exercises:sess.exercises.map(ex=>({...ex,catalogId}))}));
+  const expectedWorkouts=state.workouts.map(w=>({...w,exercises:w.exercises.map(ex=>({...ex,catalogId}))}));
+  assert.deepEqual(next.sessions,expectedHistory);
+  assert.deepEqual(next.workouts,expectedWorkouts);
   assert.equal(next.activeSession.exercises[0].catalogId,'legacy-name:'+JSON.stringify('bench press'));
   await page.locator('[data-act="logset"]').click();
   await page.locator('[data-act="finishex"]').click();
-  assert.deepEqual((await saved(page)).sessions.slice(0,2),historical);
+  assert.deepEqual((await saved(page)).sessions.slice(0,2),expectedHistory);
   await page.reload();
   await page.locator('#t-progress').click();
   assert.equal(await page.locator('.chart-card').count(),1);

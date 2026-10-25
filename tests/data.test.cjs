@@ -6,6 +6,7 @@ const html = readFileSync(require('node:path').join(__dirname,'../index.html'),'
 const storage = html.slice(html.indexOf('const STORAGE_KEY'),html.indexOf('/* =========================================================\n   UTILS'));
 const data = html.slice(html.indexOf('function requireRecord('),html.indexOf('\nfunction copySummary('));
 const empty = () => ({version:1,workouts:[],sessions:[],measurements:[],activeSession:null});
+const emptyV2 = () => ({...empty(),version:2,exercises:[]});
 function runtime(initial=empty()){
   const values = new Map(initial===undefined ? [] : [['racked_state_v1',typeof initial==='string' ? initial : JSON.stringify(initial)]]);
   const alerts=[]; let failing=false; const confirmations=[]; const successes=[];
@@ -21,8 +22,10 @@ test('v1 full backup preserves active session fields, IDs and extra metadata',()
   r.context.backup=backup;
   const next=plain(r.run('normalizeState(backup)'));
   assert.equal(next.workouts[0].id,'7');assert.equal(next.activeSession.workoutId,'7');
-  assert.deepEqual(next.activeSession.exercises[0],{...backup.activeSession.exercises[0],exerciseId:'8'});
+  assert.deepEqual(next.activeSession.exercises[0],{...backup.activeSession.exercises[0],exerciseId:'8',catalogId:'legacy-name:'+JSON.stringify('squat')});
   assert.deepEqual(next.customMetadata,{keep:true});
+  assert.equal(next.version,2);
+  assert.deepEqual(next.exercises,[{id:'legacy-name:'+JSON.stringify('squat'),name:'Squat',legacy:true}]);
 });
 
 test('older active-session backups recover missing controls from their last logged set',()=>{
@@ -44,7 +47,7 @@ test('persistent exercise identities and unfinished input/edit drafts survive v1
     custom:{source:'backup'},exercises:[exercise]};
   const backup={...empty(),workouts:[{id:'w',name:'Strength',exercises:[card]}],activeSession:active,custom:{keep:true}};
   r.context.backup=backup;
-  assert.deepEqual(plain(r.run('normalizeState(backup)')),backup);
+  assert.deepEqual(plain(r.run('normalizeState(backup)')),{...backup,version:2,exercises:[{id:card.catalogId,name:card.name}]});
 });
 
 test('malformed persistent IDs and input draft metadata are rejected in templates and sessions',()=>{
@@ -88,7 +91,8 @@ test('invalid records, numbers, dates, versions and incomplete backups are rejec
     'normalizeSessions([{date:"not a date"}])','normalizeSessions([{date:"2026-02-30T12:00:00Z"}])',
     'normalizeSessions([{exercises:[{sets:[{weight:"Infinity"}]}]}])',
     'normalizeMeasurements([{date:"2026-02-30"}])','normalizeMeasurements([{value:[] }])',
-    'normalizeState({workouts:[]})','normalizeState({version:2,workouts:[],sessions:[],measurements:[]})'
+    'normalizeState({workouts:[]})','normalizeState({version:2,workouts:[],sessions:[],measurements:[]})',
+    'normalizeState({version:3,exercises:[],workouts:[],sessions:[],measurements:[]})'
   ]) assert.throws(()=>r.run(code),undefined,code);
 });
 
@@ -107,7 +111,7 @@ test('invalid saved bytes are preserved and blocked from accidental overwrites',
     assert.equal(r.run('saveState()'),false);assert.equal(r.values.get('racked_state_v1'),raw);
     assert.equal(r.run('storageRecoveryRaw'),raw);
     assert.equal(r.run('state=defaultState();saveState({allowRecovery:true})'),true);
-    assert.deepEqual(JSON.parse(r.values.get('racked_state_v1')),empty());
+    assert.deepEqual(JSON.parse(r.values.get('racked_state_v1')),emptyV2());
   }
 });
 
