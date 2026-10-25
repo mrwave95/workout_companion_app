@@ -1,0 +1,14 @@
+{
+  "name": "racked-workout-log",
+  "version": "1.5.1",
+  "private": true,
+  "description": "Development checks for the dependency-free Racked PWA",
+  "scripts": {
+    "start": "python3 -m http.server 8000 --bind 127.0.0.1",
+    "test": "node --test --test-concurrency=1 tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "engines": { "node": ">=20" }
+}
