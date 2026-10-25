@@ -49,6 +49,6 @@ See [the engineering review](docs/technical-review.md) for safeguards, recovery 
 
 ## GitHub Pages publishing
 
-`.github/workflows/pages.yml` is manual-only, requires explicit publishing approval, and accepts only the default branch. It runs the automated checks, then stages just the five runtime files; tests, docs and tooling remain in Git but outside the site artifact.
+Keep the existing **Deploy from a branch → main → /(root)** setup. No build step or publishing workflow is needed. The automated testing workflow remains separate and does not deploy.
 
-If Pages currently uses **Deploy from a branch**, an approved settings change to **GitHub Actions** is required before merging to prevent the old branch-based rule from publishing repository files. Retain the existing domain/URL settings. Live settings could not be read here because GitHub API access was blocked; no setting was changed and no deployment was dispatched. After approval and merge, run **Publish Racked to GitHub Pages** on the default branch with its publishing checkbox enabled.
+GitHub publishes changes to `main`, so merging or pushing directly to `main` requires explicit approval. Preserve the existing site URL, domain settings and relative asset paths. Tests, documentation and tooling stay in the repository; the app loads only its runtime assets.

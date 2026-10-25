@@ -62,10 +62,10 @@
 
 ## Publishing boundaries
 
-- `.github/workflows/pages.yml` stages only the five runtime files. If adding a
-  required asset, update its explicit allowlist and worker precache as needed.
-- Keep tests, docs, this file and development tooling in Git, outside the site
-  artifact. Publishing must retain the existing URL, scope and domain settings.
-- Merging, changing live Pages settings, dispatching deployment, and deploying
-  require explicit user approval. A request to commit/push/create a PR alone
-  does not authorize any of those actions. Never auto-deploy a review branch.
+- Keep GitHub Pages **Deploy from a branch → main → /(root)**. No publishing
+  workflow or build system is needed. Keep the automated testing workflow.
+- Preserve the existing URL, domain settings and relative asset/worker paths.
+  Keep tests, docs and development tooling in the repository.
+- Changes to `main` publish the site. Merging, pushing directly to `main`, changing
+  live Pages settings, and deployment require explicit user approval. A request
+  to push a review branch or create a PR does not authorize those actions.

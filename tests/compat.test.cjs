@@ -5,7 +5,12 @@ const {browserSuite} = require('./browser-helper.cjs');
 
 // Linux WebKit supplements compatibility checks; it is not iOS Safari.
 const engine = process.env.RACKED_TEST_BROWSER || 'chromium';
-const app = browserSuite({engine});
+let originUnavailable = false;
+const app = browserSuite({engine,respond:(_name,_req,res)=>{
+  if(!originUnavailable) return false;
+  res.destroy();
+  return true;
+}});
 async function open(t,{init,serviceWorkers='block'}={}){
   const context=await app.context(t,{viewport:{width:390,height:844},serviceWorkers});
   if(init)await context.addInitScript(init);
@@ -48,7 +53,7 @@ test(`${engine}: restricted localStorage cannot cause destructive recovery or fa
   assert.doesNotMatch(await page.locator('#toast').textContent(),/downloaded/i);
 });
 
-test(`${engine}: standalone static workflow preserves notes, downloads data, and relaunches offline`,{timeout:30000},async t=>{
+test(`${engine}: standalone static workflow preserves notes, downloads data, and relaunches without its server`,{timeout:30000},async t=>{
   const {page,context}=await open(t,{serviceWorkers:'allow'});
   await page.locator('#t-create').click();
   await page.locator('#cw-name').fill('Compatibility workout');
@@ -74,10 +79,17 @@ test(`${engine}: standalone static workflow preserves notes, downloads data, and
   await page.evaluate(()=>navigator.serviceWorker.ready);
   await page.reload();
   await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
-  await context.setOffline(true);
-  await page.goto(app.origin+'/?standalone=1');
-  await page.locator('#t-workouts').click();
-  await page.locator('.workout-start').click();
-  assert.equal(await page.locator('[data-role="notes"]').inputValue(),'Controlled tempo');
-  assert.equal(await page.locator('.set-chip').count(),1);
+  // Playwright WebKit's offline emulation can reject before worker dispatch:
+  // https://github.com/microsoft/playwright/issues/42775
+  // Disconnect the origin instead; the installed worker must serve the cache.
+  originUnavailable = true;
+  try{
+    const response=await page.goto(app.origin+'/?standalone=1');
+    assert.equal(response.status(),200);
+    assert.equal(response.fromServiceWorker(),true);
+    await page.locator('#t-workouts').click();
+    await page.locator('.workout-start').click();
+    assert.equal(await page.locator('[data-role="notes"]').inputValue(),'Controlled tempo');
+    assert.equal(await page.locator('.set-chip').count(),1);
+  }finally{ originUnavailable = false; }
 });
