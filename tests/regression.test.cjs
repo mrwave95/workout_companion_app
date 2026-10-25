@@ -26,7 +26,10 @@ test('editing and reordering a workout preserves unknown exercise metadata and n
   await page.locator('#cw-save').click();
   const result=(await saved(page)).workouts[0];
   assert.equal(result.name,'Renamed');
-  assert.deepEqual(result.exercises,[second,first]);
+  assert.deepEqual(result.exercises,[
+    {...second,catalogId:'legacy-name:'+JSON.stringify('curl')},
+    {...first,catalogId:'legacy-name:'+JSON.stringify('squat')}
+  ]);
 });
 
 test('large finite legacy weights survive steppers, logging, finishing and reload',async t=>{

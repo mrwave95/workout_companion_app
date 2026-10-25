@@ -1,6 +1,6 @@
 {
   "name": "racked-workout-log",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "private": true,
   "description": "Development checks for the dependency-free Racked PWA",
   "scripts": {

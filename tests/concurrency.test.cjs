@@ -110,7 +110,8 @@ test('without Web Locks the app fails safely and still exports original data',as
   assert.match(await p.locator('#storageMessage').innerText(),/Safe editing is unavailable/);
   const event=p.waitForEvent('download');await p.locator('#storageExport').click();
   const file=await event;
-  assert.deepEqual(JSON.parse(await readFile(await file.path(),'utf8')),blank());
+  assert.deepEqual(JSON.parse(await readFile(await file.path(),'utf8')),{...blank(),version:2,exercises:[]});
+  assert.equal(await stored(p),null);
 });
 
 test('pending lock navigation cancels cleanly and lifecycle restores preserve drafts',async t=>{
