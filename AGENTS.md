@@ -29,8 +29,10 @@
   Finishing atomically archives once and clears the active record.
 - Full backups include library-only exercises; category exports include referenced
   definitions. Category imports add definitions and replace only their collection,
-  preserving retained history/active references. Workout starting values stay local
-  to each template. Stage new definitions until the workout saves successfully.
+  preserving retained history/active references. Workout template defaults remain
+  local fallbacks; new sessions use the latest completed set for the catalogId.
+  Derive exercise history from sessions with getExerciseHistory(); never persist
+  calculated progression. Stage new definitions until the workout saves successfully.
 - Validate imports before confirmation/replacement. Category imports affect only
   their category; full backups require all three collections. Do not introduce
   destructive migrations or silently normalize invalid saved data into deletion.
@@ -71,7 +73,7 @@
   when available. A restricted home cache can use `--cache /tmp/racked-npm-cache`.
 - Unit checks: `node --test tests/data.test.cjs tests/library-data.test.cjs tests/sw.test.cjs`.
 - Optional second engine: `npx playwright install webkit`, then
-  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs tests/library.test.cjs`.
+  `RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs tests/library.test.cjs tests/history.test.cjs`.
 - Run relevant checks after edits, the full suite before review, and
   `git diff --check`. Report failures, skips and unverified browsers honestly.
 

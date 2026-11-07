@@ -201,6 +201,10 @@
   .entry-row:active{ background:var(--surface-raised); }
   .entry-row .er-date{ color:var(--text-muted); font-size:13px; }
   .entry-row .er-val{ font-family:ui-monospace,"SF Mono","Roboto Mono",monospace; font-weight:700; }
+  #exercise-history-entries .entry-row{ gap:12px; }
+  #exercise-history-entries .er-date{ overflow-wrap:anywhere; }
+  #exercise-history-entries .er-val{ flex-shrink:0; }
+  .history-set{ gap:12px; cursor:default; flex-wrap:wrap; }
   .stat-row{ display:flex; gap:20px; margin-top:14px; }
   .stat{ flex:1; }
   .stat .sv{ font-family: ui-monospace, monospace; font-size:20px; font-weight:700; }
@@ -626,11 +630,15 @@ function startOrResumeWorkout(workoutId){
 
   state.activeSession = {
     id: uid(), workoutId: w.id, workoutName: w.name, date: new Date().toISOString(),
-    exercises: w.exercises.map(ex=>({
-      exerciseId: ex.id, catalogId: exerciseCatalogId(ex), name: exerciseName(ex), notes:'', weight: ex.weight, reps: ex.reps,
-      startWeight: ex.weight, startReps: ex.reps,
-      sets: [], finished:false
-    }))
+    exercises: w.exercises.map(ex=>{
+      const last = getLastSetForExercise(exerciseCatalogId(ex));
+      const weight = last?.weight ?? ex.weight, reps = last?.reps ?? ex.reps;
+      return {
+        exerciseId: ex.id, catalogId: exerciseCatalogId(ex), name: exerciseName(ex), notes:'', weight, reps,
+        startWeight: weight, startReps: reps,
+        sets: [], finished:false
+      };
+    })
   };
   if(!saveState()) return;
   navigate('session', {workoutId, workoutName:w.name});
@@ -698,23 +706,9 @@ function renderSession(startIndex){
 // top set of each of the last two sessions for this exercise identity. If the
 // rep count matches both times, that's a plateau worth a gentle nudge.
 function getRepProgressionHint(exercise, byRecency){
-  const key = exerciseCatalogId(exercise);
-  const bySession = [];
-  for(const sess of byRecency){
-    for(const ex of sess.exercises){
-      if(exerciseCatalogId(ex)===key && ex.sets.length>0){
-        const best = ex.sets.reduce((m,s)=>{
-          const e1 = est1RM(s.weight, s.reps);
-          return e1>m.e ? {e:e1, weight:s.weight, reps:s.reps} : m;
-        }, {e:-1, weight:0, reps:0});
-        bySession.push(best);
-        break; // one entry per session
-      }
-    }
-    if(bySession.length>=2) break;
-  }
+  const bySession = getExerciseHistory(exerciseCatalogId(exercise), byRecency).slice(-2).reverse();
   if(bySession.length<2) return null;
-  const [latest, prev] = bySession;
+  const [latest, prev] = bySession.map(entry=>entry.bestSet);
   if(latest.reps>0 && latest.reps===prev.reps){
     return `Same rep count (${latest.reps}) the last 2 times — maybe push for one more today.`;
   }
@@ -1016,7 +1010,7 @@ function makeCarousel(viewport, track, count, onChange, startIndex){
     onChange && onChange(index);
   }
   viewport.addEventListener('pointerdown', (e)=>{
-    if(e.target.closest('button, input, textarea, select')) return; // let native controls handle their own tap
+    if(e.target.closest('button, input, textarea, select, canvas[data-history-chart]')) return; // preserve control and graph taps
     dragging = true; startX = e.clientX; dx = 0; width = viewport.clientWidth;
     track.style.transition = 'none';
     viewport.setPointerCapture && viewport.setPointerCapture(e.pointerId);
@@ -1070,15 +1064,25 @@ function hasLegacyExerciseHistory(){
 function legacyHistoryNotice(){
   return hasLegacyExerciseHistory() ? `<p class="muted history-notice">Older history keeps its previous name groups. Identical names may have meant different exercises; original names and logged sets are preserved.</p>` : '';
 }
+// A read-only view of completed sessions, never a second persistent history.
+// Keep session records and every original set available, including duplicate cards.
+function getExerciseHistory(id, sessions=state.sessions){
+  const history = [];
+  for(const session of sessions){
+    const sets = session.exercises.filter(ex=>exerciseCatalogId(ex)===id).flatMap(ex=>ex.sets);
+    if(!sets.length) continue;
+    const bestSet = sets.reduce((best,set)=>est1RM(set.weight,set.reps)>est1RM(best.weight,best.reps) ? set : best);
+    sets.sort((a,b)=>Date.parse(a.time || session.date)-Date.parse(b.time || session.date));
+    history.push({session, sets, bestSet, bestEstimated1RM:Math.round(est1RM(bestSet.weight,bestSet.reps)*10)/10});
+  }
+  return history.sort((a,b)=>Date.parse(a.session.date)-Date.parse(b.session.date));
+}
 function getLastSetForExercise(id){
   let last = null, lastTime = -Infinity;
-  for(const sess of state.sessions){
-    for(const ex of sess.exercises){
-      if(exerciseCatalogId(ex)!==id) continue;
-      for(const set of ex.sets){
-        const time = Date.parse(set.time || sess.date);
-        if(time>=lastTime){ last = set; lastTime = time; }
-      }
+  for(const {session,sets} of getExerciseHistory(id)){
+    for(const set of sets){
+      const time = Date.parse(set.time || session.date);
+      if(time>=lastTime){ last = set; lastTime = time; }
     }
   }
   return last;
@@ -1418,30 +1422,56 @@ function est1RM(weight, reps){
 
 function paintWorkoutProgress(){
   const body = document.getElementById('prog-body');
-  // History records keep their snapshots; the library supplies current labels.
-  const groups = Object.create(null);
-  const sortedSessions = [...state.sessions].sort((a,b)=> new Date(a.date) - new Date(b.date));
-  sortedSessions.forEach(sess=>{
-    sess.exercises.forEach(ex=>{
-      if(ex.sets.length===0) return;
-      const key = exerciseCatalogId(ex);
-      if(!groups[key]) groups[key] = { name: exerciseName(ex), workoutName: sess.workoutName, points: [] };
-      groups[key].workoutName = sess.workoutName;
-      const best = ex.sets.reduce((m,s)=>{
-        const e1 = est1RM(s.weight, s.reps);
-        return e1>m.e ? {e:e1, w:s.weight, r:s.reps} : m;
-      }, {e:-1, w:0, r:0});
-      groups[key].points.push({ date: new Date(sess.date), value: Math.round(best.e*10)/10, w: best.w, r: best.r });
-    });
-  });
-  const keys = Object.keys(groups);
-  if(keys.length===0){
+  const cards = state.exercises.map(ex=>({
+    catalogId:ex.id, name:ex.name,
+    points:getExerciseHistory(ex.id).map(entry=>({
+      ...entry, date:new Date(entry.session.date), value:entry.bestEstimated1RM,
+      w:entry.bestSet.weight, r:entry.bestSet.reps
+    }))
+  })).filter(card=>card.points.length);
+  if(!cards.length){
     body.innerHTML = `<div class="empty-state"><div class="ee">📈</div><div class="el">No logged sets yet</div><div>Finish a workout or individual exercise to see progress here.</div></div>`;
     return;
   }
-  keys.forEach(k=> groups[k].points.sort((a,b)=>a.date-b.date));
-  renderProgressCarousel(body, keys.map(k=>groups[k]), 'red', {unit:'kg', metricLabel:'Est. 1RM'});
+  renderProgressCarousel(body, cards, 'red', {
+    unit:'kg', metricLabel:'Est. 1RM',
+    afterHtml:'<div id="exercise-history-entries" class="entry-list"></div>',
+    onChange:i=>renderExerciseHistoryEntries(cards[i]),
+    onPoint:(card,index)=>openExerciseHistoryModal(card,index)
+  });
   body.insertAdjacentHTML('afterbegin', legacyHistoryNotice());
+}
+
+function renderExerciseHistoryEntries(card){
+  const box = document.getElementById('exercise-history-entries');
+  box.innerHTML = `<div class="eyebrow" style="margin:4px 0 10px;">Performances · ${esc(card.name)}</div>
+    <p class="muted">Select a graph point or a performance to inspect every logged set. Points follow session order, including sessions on the same day.</p>`+
+    card.points.map((point,index)=>`<button type="button" class="entry-row" data-history-index="${index}">
+      <span class="er-date">${fmtDateFull(point.session.date)} · ${esc(point.session.workoutName)}${point.session.kind==='exercise' ? ' · Individual exercise' : ''}</span>
+      <span class="er-val">${point.value} kg</span>
+    </button>`).join('');
+  box.querySelectorAll('[data-history-index]').forEach(button=>{
+    button.onclick = ()=>openExerciseHistoryModal(card,Number(button.dataset.historyIndex));
+  });
+}
+function openExerciseHistoryModal(card,index){
+  const point = card.points[index];
+  const session = point.session;
+  showModal(`
+    <div class="eyebrow">Completed performance</div>
+    <div class="h2" style="margin-bottom:16px;">${esc(card.name)}</div>
+    <p>${fmtDateFull(session.date)} · ${esc(session.workoutName)}${session.kind==='exercise' ? ' · Individual exercise' : ''}</p>
+    <p class="muted" style="overflow-wrap:anywhere;">Session: ${esc(session.id)}</p>
+    <p>Best estimated 1RM: ${point.value} kg</p>
+    <div class="eyebrow">All logged sets</div>
+    ${point.sets.map(set=>`<div class="entry-row history-set">
+      <span>${set.weight} kg × ${set.reps} reps</span>
+      <span class="muted">${set.time ? esc(new Date(set.time).toLocaleString()) : 'Time not recorded'}</span>
+    </div>`).join('')}
+    ${session.exercises.filter(ex=>ex.catalogId===card.catalogId && ex.notes).map(ex=>`<p class="muted">${esc(ex.notes)}</p>`).join('')}
+    <button type="button" class="btn ghost" id="history-close" style="margin-top:16px;">Close</button>
+  `);
+  document.getElementById('history-close').onclick = hideModal;
 }
 
 function paintSizeProgress(){
@@ -1540,13 +1570,13 @@ function renderProgressCarousel(body, cards, colorName, opts={}){
     const first = pts[0];
     const delta = pts.length>1 ? (last.value-first.value) : 0;
     const deltaStr = (delta>0?'+':'') + (Math.round(delta*10)/10) + unit;
-    const bestSetLine = (last.w!=null) ? `<div class="muted" style="margin-top:10px; font-size:11px;">Best set that day: ${last.w}kg × ${last.r}</div>` : '';
+    const bestSetLine = (last.w!=null) ? `<div class="muted" style="margin-top:10px; font-size:11px;">Best set in latest session: ${last.w}kg × ${last.r}</div>` : '';
     return `
     <div class="card-slide">
       <div class="chart-card">
         <div class="cc-title">${esc(c.name)}</div>
         <div class="cc-sub">${c.workoutName?esc(c.workoutName)+' · ':''}${pts.length} data point${pts.length!==1?'s':''}</div>
-        <canvas class="chart" id="chart-${i}" data-idx="${i}"></canvas>
+        <canvas class="chart" id="chart-${i}" data-idx="${i}"${opts.onPoint ? ' data-history-chart' : ''}></canvas>
         <div class="stat-row">
           <div class="stat"><div class="sv mono">${last.value}${unit}</div><div class="sl">${metricLabel}</div></div>
           <div class="stat"><div class="sv mono">${deltaStr}</div><div class="sl">Change</div></div>
@@ -1582,7 +1612,13 @@ function renderProgressCarousel(body, cards, colorName, opts={}){
   requestAnimationFrame(()=>{
     cards.forEach((c,i)=>{
       const canvas = document.getElementById('chart-'+i);
-      if(canvas) drawChart(canvas, c.points, color);
+      if(canvas){
+        if(opts.onPoint){
+          canvas.setAttribute('role','img');
+          canvas.setAttribute('aria-label',`${c.name} estimated 1RM by session. Select a point or use the performance buttons below to inspect sets.`);
+        }
+        drawChart(canvas, c.points, color, opts.onPoint ? index=>opts.onPoint(c,index) : null);
+      }
     });
   });
 }
@@ -1590,7 +1626,7 @@ function renderProgressCarousel(body, cards, colorName, opts={}){
 /* =========================================================
    CANVAS LINE CHART
    ========================================================= */
-function drawChart(canvas, points, color){
+function drawChart(canvas, points, color, onPoint=null){
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || 300, h = canvas.clientHeight || 180;
   canvas.width = w*dpr; canvas.height = h*dpr;
@@ -1600,7 +1636,9 @@ function drawChart(canvas, points, color){
 
   if(!points || points.length===0) return;
   const pad = {l:40, r:10, t:14, b:22};
-  const xs = points.map(p=>p.date.getTime());
+  // Exercise performances use ordered slots so even identical dates stay selectable.
+  // Measurement charts retain their existing time scale.
+  const xs = points.map((p,i)=>onPoint ? i : p.date.getTime());
   const ys = points.map(p=>p.value);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   let minY = Math.min(...ys), maxY = Math.max(...ys);
@@ -1623,16 +1661,30 @@ function drawChart(canvas, points, color){
     ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin='round'; ctx.lineCap='round';
     ctx.beginPath();
     points.forEach((p,i)=>{
-      const x = xScale(p.date.getTime()), y = yScale(p.value);
+      const x = xScale(xs[i]), y = yScale(p.value);
       if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     });
     ctx.stroke();
   }
   ctx.fillStyle = color;
-  points.forEach(p=>{
-    const x = xScale(p.date.getTime()), y = yScale(p.value);
+  points.forEach((p,i)=>{
+    const x = xScale(xs[i]), y = yScale(p.value);
     ctx.beginPath(); ctx.arc(x,y,3.5,0,Math.PI*2); ctx.fill();
   });
+
+  if(onPoint){
+    canvas.style.cursor = 'pointer';
+    canvas.onclick = event=>{
+      const rect = canvas.getBoundingClientRect();
+      const x = (event.clientX-rect.left)*w/rect.width, y = (event.clientY-rect.top)*h/rect.height;
+      let nearest = -1, distance = 18;
+      points.forEach((point,i)=>{
+        const d = Math.hypot(x-xScale(xs[i]), y-yScale(point.value));
+        if(d<distance){ nearest=i; distance=d; }
+      });
+      if(nearest!==-1) onPoint(nearest);
+    };
+  }
 
   ctx.fillStyle = '#8b8f97'; ctx.font = '10.5px -apple-system, sans-serif'; ctx.textBaseline='top';
   ctx.textAlign='left';
@@ -1668,6 +1720,8 @@ function renderBackup(){
     <div class="eyebrow" style="margin-top:22px;">Export</div>
     <button class="btn primary" id="bk-export-workouts" style="margin-top:10px;">Export Workouts</button>
     <button class="btn primary" id="bk-export-sessions" style="margin-top:10px;">Export Workout Progression</button>
+    <button class="btn primary" id="bk-export-exercise-progression" style="margin-top:10px;">Export Exercise Progression</button>
+    <p class="muted" style="margin-top:8px;">Calculated exercise summaries for analysis. Use Workout Progression for complete sessions or Full Backup to restore all data.</p>
     <button class="btn primary" id="bk-export-measurements" style="margin-top:10px;">Export Weight / Size Progression</button>
     <button class="btn ghost" id="bk-copy" style="margin-top:10px;">Copy Progress Summary as Text</button>
 
@@ -1689,6 +1743,7 @@ function renderBackup(){
   `;
   document.getElementById('bk-export-workouts').onclick = exportWorkouts;
   document.getElementById('bk-export-sessions').onclick = exportSessions;
+  document.getElementById('bk-export-exercise-progression').onclick = exportExerciseProgression;
   document.getElementById('bk-export-measurements').onclick = exportMeasurements;
   document.getElementById('bk-copy').onclick = copySummary;
 
@@ -1730,6 +1785,18 @@ function exportSessions(){
     { type:'racked-sessions', version:2, exportedAt:new Date().toISOString(), exercises:referencedExercises(state.sessions), sessions: state.sessions });
   toast('Workout progression exported');
 }
+function exportExerciseProgression(){
+  const progression = state.exercises.flatMap(ex=>getExerciseHistory(ex.id).map(({session,bestEstimated1RM})=>({
+    catalogId:ex.id, name:ex.name, sessionId:session.id, sessionDate:session.date,
+    workoutId:session.workoutId, workoutName:session.workoutName, bestEstimated1RM
+  })));
+  downloadJSON(`racked-exercise-progression-${todayISODate()}.json`, {
+    type:'racked-exercise-progression', version:1, exportedAt:new Date().toISOString(),
+    exercises:state.exercises, progression
+  });
+  toast('Exercise progression exported');
+}
+
 function exportMeasurements(){
   downloadJSON(`racked-size-progression-${todayISODate()}.json`,
     { type:'racked-measurements', version:2, exportedAt:new Date().toISOString(), measurements: state.measurements });

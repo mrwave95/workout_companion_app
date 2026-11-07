@@ -34,7 +34,7 @@ For the additional WebKit checks, install that engine and run:
 
 ```sh
 npx playwright install webkit
-RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs tests/library.test.cjs
+RACKED_TEST_BROWSER=webkit node --test --test-concurrency=1 tests/compat.test.cjs tests/concurrency.test.cjs tests/exercises.test.cjs tests/library.test.cjs tests/history.test.cjs
 ```
 
 CI runs both sets of browser checks. Linux WebKit is not a substitute for iPhone/iPad testing.
@@ -50,6 +50,14 @@ Unfinished exercises, notes, typed controls (including incomplete input), and se
 The saved `exercises` list owns current names and identities. Workout/session `catalogId` references this list; template-card `id` and session `exerciseId` remain instance references. Historical names are snapshots, never the live name source. Full backups include the complete library, including exercises never used in a workout. Workouts/progression exports include their referenced library definitions; category imports add definitions without removing unrelated exercises or active-session references.
 
 Older version-1 backups remain readable. Unidentified records keep their previous case-insensitive name groups under stable compatibility IDs, with an uncertainty notice. Original IDs, names, notes, sets, timestamps, drafts, and unknown metadata are preserved; only missing library references are added. Historical spelling cannot prove true identity or a rename. Conflicting IDs/names, missing version-2 definitions, and unnamed legacy records are rejected with an explanation instead of being guessed or merged. Failed conversion/import/save does not overwrite the original storage; the original bytes remain exportable through Full Backup when recovery is needed.
+
+## Shared exercise progression
+
+Completed workout and individual-exercise sessions contribute to the same history through `catalogId`. Starting a workout suggests the most recently logged weight/reps for that identity, using set timestamps (or the session date when absent), just like the Exercises library. An exercise with no completed history uses that workout's template defaults. Templates still own exercise selection, order and fallback settings; resuming an unfinished session keeps its existing controls and drafts.
+
+Progression → Workout keeps one graph per exercise and one best estimated 1RM per completed exercise-session. The existing formula is unchanged: weight for one rep, otherwise `weight * (1 + reps / 30)`, displayed to one decimal. Repeated cards for an exercise in one session contribute to one point; separate sessions remain distinct even with identical dates. Exercise points are spaced in chronological session order. Select a point or a dated performance below the graph to inspect its session ID, workout/source, original sets, timestamps and notes. Body measurement graphs are unchanged.
+
+**Export Exercise Progression** downloads an analytical JSON file (`type: racked-exercise-progression`, export version 1) with current exercise definitions and a `progression` array. Each calculated row includes `catalogId`, current `name`, `sessionId`, `sessionDate`, `workoutId`, `workoutName` and `bestEstimated1RM` in kg. It is calculated on demand from completed sessions; it is not stored or imported as another backup format. **Export Workout Progression** still exports full raw sessions, and **Full Backup** still preserves all data, including active training. Storage remains format version 2 with version-1 backup compatibility.
 
 ## Protect your data
 

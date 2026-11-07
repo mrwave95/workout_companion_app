@@ -140,7 +140,7 @@ test('rename changes current labels while preserving history, templates and acti
   assert.match(await page.locator('.cc-sub').innerText(),/2 data points/);
 });
 
-test('one library identity shares progression while each workout retains its starting values',async t=>{
+test('one library identity shares latest starting values while templates retain their fallbacks',async t=>{
   const initial={...blank(),exercises:[bench],workouts:[workout('one',card('first',50,8)),workout('two',card('second',35,12))]};
   const page=await open(t,initial);
   await page.locator('#t-workouts').click();
@@ -154,8 +154,8 @@ test('one library identity shares progression while each workout retains its sta
   assert.equal((await saved(page)).workouts[1].exercises[0].weight,35);
   assert.equal((await saved(page)).workouts[1].exercises[0].reps,12);
   await page.locator('.workout-start').last().click();
-  assert.equal(await page.locator('[data-role="weight"]').inputValue(),'35');
-  assert.equal(await page.locator('[data-role="reps"]').inputValue(),'12');
+  assert.equal(await page.locator('[data-role="weight"]').inputValue(),'55');
+  assert.equal(await page.locator('[data-role="reps"]').inputValue(),'9');
   assert.match(await page.locator('.ex-card').innerText(),/Last time: 55kg × 9/);
   await page.locator('[data-act="logset"]').click();
   await page.locator('[data-act="finishex"]').click();
