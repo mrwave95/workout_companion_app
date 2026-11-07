@@ -1326,12 +1326,12 @@ function paintMeasure(){
   const fieldsHtml = DEFAULT_PARTS.map((p,i)=>`
     <div class="field">
       <label for="ms-default-${i}">${esc(p)} (cm)</label>
-      <input type="number" step="0.1" id="ms-default-${i}" data-part="${esc(p)}" placeholder="—" value="${val(p)}">
+      <input type="text" inputmode="decimal" id="ms-default-${i}" data-part="${esc(p)}" placeholder="—" value="${esc(val(p))}">
     </div>`).join('');
   const customHtml = customParts.map((p,i)=>`
     <div class="field">
       <div style="display:flex; align-items:baseline; gap:4px;"><label for="ms-custom-${i}">${esc(p)} (cm)</label><button type="button" class="li-del" data-rmc="${i}" aria-label="Remove ${esc(p)}" style="font-size:14px; padding:2px 6px;">✕</button></div>
-      <input type="number" step="0.1" id="ms-custom-${i}" data-part="${esc(p)}" placeholder="—" value="${val(p)}">
+      <input type="text" inputmode="decimal" id="ms-custom-${i}" data-part="${esc(p)}" placeholder="—" value="${esc(val(p))}">
     </div>`).join('');
   el.innerHTML = `
     <div class="field">
@@ -1372,7 +1372,7 @@ function paintMeasure(){
     const incoming = [];
     for(const inp of el.querySelectorAll('[data-part]')){
       if(inp.value.trim()==='') continue;
-      const value = readNonnegativeInput(inp);
+      const value = readWeightInput(inp);
       if(value===null){ toast('Enter non-negative measurement values'); return; }
       incoming.push({id:uid(), date, part:inp.dataset.part, value});
     }
@@ -1530,7 +1530,7 @@ function openEditMeasurementModal(id){
       </div>
       <div class="field">
         <label for="modal-m-value">Value (cm)</label>
-        <input type="number" step="0.1" inputmode="decimal" id="modal-m-value" value="${m.value}">
+        <input type="text" inputmode="decimal" id="modal-m-value" value="${m.value}">
       </div>
     </div>
     <button class="btn primary" id="modal-m-save">Save Changes</button>
@@ -1539,7 +1539,7 @@ function openEditMeasurementModal(id){
   `);
   document.getElementById('modal-m-save').onclick = ()=>{
     const m = state.measurements.find(x=>x.id===id);
-    const v = readNonnegativeInput(document.getElementById('modal-m-value'));
+    const v = readWeightInput(document.getElementById('modal-m-value'));
     const d = document.getElementById('modal-m-date').value;
     if(v===null || !d){ toast('Enter a date and a valid value'); return; }
     m.value = v;
