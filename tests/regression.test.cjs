@@ -1,7 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {browserSuite,seedState} = require('./browser-helper.cjs');
-const app = browserSuite();
+const app = browserSuite({engine:process.env.RACKED_TEST_BROWSER || 'chromium'});
 
 async function open(t,workout){
   const context = await app.context(t);
